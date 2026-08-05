@@ -18,6 +18,7 @@
 ### ۳) تعمیر (Repair)
 - جایگزینی فایل‌های هسته از `sources/wordpress_core.zip`
 - بازیابی `.htaccess` ریشه از `sources/default.htaccess`
+- **جایگزینی پلاگین‌های مخزن وردپرس** (Elementor، Classic Editor، LiteSpeed Cache و ...) از wordpress.org
 - اصلاح سطح دسترسی‌ها (755/644/600)
 
 ### ۴) سخت‌سازی (Hardening)

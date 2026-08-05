@@ -110,9 +110,8 @@ class MVN_Cleaner {
 		}
 
 		// Never touch this plugin's own files or wp-config.php via cleaner.
-		$self = 'wp-content/plugins/mohtavanegar-antivirus';
-		if ( 0 === strpos( $rel, $self ) ) {
-			return new WP_Error( 'protected', 'فایل‌های خود پلاگین قابل ویرایش از این مسیر نیستند.' );
+		if ( mvn_is_self_plugin_path( $rel ) ) {
+			return new WP_Error( 'protected', 'فایل‌های خود پلاگین آنتی‌ویروس قابل ویرایش از این مسیر نیستند.' );
 		}
 		if ( 'wp-config.php' === $rel ) {
 			return new WP_Error( 'protected', 'wp-config.php محافظت شده است — دستی بررسی کنید.' );
@@ -186,8 +185,8 @@ class MVN_Cleaner {
 		// Extra: strip a leading malware PHP preamble (common prepend injector).
 		// Pattern: php open tag + hex comment + base64 var + eval, then real content.
 		$stripped = preg_replace(
-			'/^<\?php\s*(?:\/\*[^*]*\*\/\s*)*(?:(?:\$[a-zA-Z0-9_]+\s*=\s*[\'"][A-Za-z0-9+\/=]{40,}[\'"]\s*;\s*)|(?:(?:@\s*)?(?:eval|assert)\s*\([^;]+\)\s*;\s*)){1,8}(?:\?>\s*)?/s',
-			'<?php' . "\n",
+			'/^\x3c\x3fphp\s*(?:\/\*[^*]*\*\/\s*)*(?:(?:\$[a-zA-Z0-9_]+\s*=\s*[\'"][A-Za-z0-9+\/=]{40,}[\'"]\s*;\s*)|(?:(?:@\s*)?(?:eval|assert)\s*\([^;]+\)\s*;\s*)){1,8}(?:\x3f\x3e\s*)?/s',
+			"\x3c\x3fphp\n",
 			$cleaned,
 			1,
 			$pre_count
@@ -198,7 +197,7 @@ class MVN_Cleaner {
 		}
 
 		// Collapse leftover empty PHP open/close tag pairs.
-		$cleaned = preg_replace( '/<\?php\s*\?>\s*/', '', $cleaned );
+		$cleaned = preg_replace( '/\x3c\x3fphp\s*\x3f\x3e\s*/', '', $cleaned );
 
 		if ( 0 === $hits || $cleaned === $original ) {
 			// Could not auto-clean — quarantine the whole file instead.

@@ -29,10 +29,13 @@ class MVN_Admin {
 			'mvn_scan_status',
 			'mvn_fix_one',
 			'mvn_fix_batch',
+			'mvn_fix_clear',
 			'mvn_htaccess_restore',
 			'mvn_htaccess_purge',
 			'mvn_core_start',
 			'mvn_core_tick',
+			'mvn_plugin_start',
+			'mvn_plugin_tick',
 			'mvn_perms_start',
 			'mvn_perms_tick',
 			'mvn_hardening_save',
@@ -135,10 +138,12 @@ class MVN_Admin {
 		$this->render(
 			'repair',
 			array(
-				'core'   => MVN_Core_Repair::source_status(),
-				'ht'     => MVN_Htaccess_Guard::root_status(),
-				'cstate' => MVN_Core_Repair::get_state(),
-				'pstate' => MVN_Permissions::get_state(),
+				'core'    => MVN_Core_Repair::source_status(),
+				'ht'      => MVN_Htaccess_Guard::root_status(),
+				'cstate'  => MVN_Core_Repair::get_state(),
+				'pstate'  => MVN_Permissions::get_state(),
+				'plugins' => MVN_Plugin_Repair::catalog_status(),
+				'plstate' => MVN_Plugin_Repair::get_state(),
 			)
 		);
 	}
@@ -234,6 +239,12 @@ class MVN_Admin {
 		wp_send_json_success( $result );
 	}
 
+	public function ajax_fix_clear() {
+		$this->guard();
+		MVN_Scanner::clear_issues();
+		wp_send_json_success( array( 'message' => 'لیست مشکلات پاک شد. یک اسکن جدید اجرا کنید.' ) );
+	}
+
 	public function ajax_htaccess_restore() {
 		$this->guard();
 		$r = MVN_Htaccess_Guard::restore_root();
@@ -278,6 +289,45 @@ class MVN_Admin {
 			'written'  => isset( $state['written'] ) ? (int) $state['written'] : 0,
 			'skipped'  => isset( $state['skipped'] ) ? (int) $state['skipped'] : 0,
 			'errors'   => isset( $state['errors'] ) ? array_slice( $state['errors'], -10 ) : array(),
+		);
+	}
+
+	public function ajax_plugin_start() {
+		$this->guard();
+		$slug = isset( $_POST['slug'] ) ? sanitize_key( wp_unslash( $_POST['slug'] ) ) : '';
+		if ( ! $slug ) {
+			wp_send_json_error( array( 'message' => 'slug خالی است.' ) );
+		}
+		@set_time_limit( 300 );
+		$state = MVN_Plugin_Repair::start( $slug );
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_plugin_state( $state ) );
+	}
+
+	public function ajax_plugin_tick() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$state = MVN_Plugin_Repair::tick();
+		wp_send_json_success( $this->public_plugin_state( $state ) );
+	}
+
+	private function public_plugin_state( $state ) {
+		if ( empty( $state ) ) {
+			return array( 'status' => 'idle' );
+		}
+		return array(
+			'status'  => isset( $state['status'] ) ? $state['status'] : 'idle',
+			'slug'    => isset( $state['slug'] ) ? $state['slug'] : '',
+			'name'    => isset( $state['name'] ) ? $state['name'] : '',
+			'folder'  => isset( $state['folder'] ) ? $state['folder'] : '',
+			'total'   => isset( $state['total'] ) ? (int) $state['total'] : 0,
+			'cursor'  => isset( $state['cursor'] ) ? (int) $state['cursor'] : 0,
+			'written' => isset( $state['written'] ) ? (int) $state['written'] : 0,
+			'skipped' => isset( $state['skipped'] ) ? (int) $state['skipped'] : 0,
+			'errors'  => isset( $state['errors'] ) ? array_slice( $state['errors'], -10 ) : array(),
+			'backup'  => isset( $state['backup_path'] ) ? $state['backup_path'] : '',
 		);
 	}
 

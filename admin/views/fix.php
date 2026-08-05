@@ -19,6 +19,7 @@ $count = is_array( $issues ) ? count( $issues ) : 0;
 			<button type="button" class="button" id="mvn-fix-htaccess" data-filter="delete_htaccess">حذف همه htaccess جعلی</button>
 			<button type="button" class="button" id="mvn-fix-clean" data-filter="clean">پاکسازی کدهای تزریق‌شده</button>
 			<button type="button" class="button" id="mvn-fix-uploads" data-filter="quarantine_delete">حذف PHPهای uploads</button>
+			<button type="button" class="button" id="mvn-fix-clear">پاک کردن لیست (اسکن مجدد)</button>
 		</div>
 		<div id="mvn-fix-progress" class="mvn-progress-wrap" style="display:none;margin-bottom:16px">
 			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-fix-bar" style="width:0%"></div></div>

@@ -79,7 +79,7 @@ function mvn_signatures() {
 			'id'       => 'long_base64_blob',
 			'label'    => 'بلوک طولانی base64 (احتمال payload رمزشده)',
 			'severity' => 'warning',
-			'pattern'  => '/[\'"][A-Za-z0-9+\/]{250,}={0,2}[\'"]/',
+			'pattern'  => '/[\'"](?=.*[+\/=])[A-Za-z0-9+\/]{800,}={0,2}[\'"]/',
 			'scope'    => 'php',
 			'clean'    => 'none',
 		),
@@ -87,7 +87,7 @@ function mvn_signatures() {
 			'id'       => 'hex_string_chain',
 			'label'    => 'رشته hex طولانی (\\x41\\x42...)',
 			'severity' => 'warning',
-			'pattern'  => '/(?:\\\\x[0-9a-f]{2}){30,}/i',
+			'pattern'  => '/(?:\\\\x[0-9a-f]{2}){60,}/i',
 			'scope'    => 'php',
 			'clean'    => 'none',
 		),
@@ -95,7 +95,7 @@ function mvn_signatures() {
 			'id'       => 'chr_chain',
 			'label'    => 'زنجیره chr() برای ساخت رشته مخفی',
 			'severity' => 'warning',
-			'pattern'  => '/\bchr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(/i',
+			'pattern'  => '/\bchr\s*\(\s*(?!31\s*\)\s*\.\s*chr\s*\(\s*139\b)\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(/i',
 			'scope'    => 'php',
 			'clean'    => 'none',
 		),
@@ -103,15 +103,15 @@ function mvn_signatures() {
 			'id'       => 'globals_obfuscation',
 			'label'    => 'استفاده مبهم از $GLOBALS با کلید رمزشده',
 			'severity' => 'warning',
-			'pattern'  => '/\$GLOBALS\s*\[\s*[\'"][A-Za-z0-9+\/=]{16,}[\'"]\s*\]/',
+			'pattern'  => '/\$GLOBALS\s*\[\s*[\'"][A-Za-z0-9+\/]*(?:[+\/=][A-Za-z0-9+\/=]{12,}|[a-f0-9]{32,})[\'"]\s*\]/',
 			'scope'    => 'php',
 			'clean'    => 'none',
 		),
 		array(
 			'id'       => 'variable_variables_eval',
-			'label'    => 'متغیرهای داینامیک + eval',
+			'label'    => 'فراخوانی تابع از ورودی کاربر (متغیر تابعی + $_REQUEST)',
 			'severity' => 'critical',
-			'pattern'  => '/\$\$?[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
+			'pattern'  => '/(?<!\->)\$\$?[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
 			'scope'    => 'php',
 			'clean'    => 'statement',
 		),
@@ -119,9 +119,9 @@ function mvn_signatures() {
 		// ---------- Known webshells ----------
 		array(
 			'id'       => 'webshell_markers',
-			'label'    => 'امضای وب‌شل شناخته‌شده (c99/r57/WSO/FilesMan/b374k)',
+			'label'    => 'امضای وب‌شل شناخته‌شده (c99/r57/WSO/b374k)',
 			'severity' => 'critical',
-			'pattern'  => '/\b(c99shell|r57shell|FilesMan|b374k|weevely|WSOshell|wso_version|Mini Shell|IndoXploit|AnonymousFox|alfa-shell|alfacgiapi)\b/i',
+			'pattern'  => '/\b(c99shell|r57shell|b374k|weevely|WSOshell|wso_version|IndoXploit|alfa-shell|alfacgiapi)\b/i',
 			'scope'    => 'php',
 			'clean'    => 'none',
 		),
@@ -139,7 +139,7 @@ function mvn_signatures() {
 			'id'       => 'prepend_wrapper',
 			'label'    => 'بلوک تزریق‌شده با کامنت/hex در ابتدای فایل',
 			'severity' => 'critical',
-			'pattern'  => '/\A\s*<\?php\s*(?:\/\*\s*[a-f0-9]{16,}\s*\*\/|\/\/\s*[a-f0-9]{16,}|\$[a-zA-Z0-9_]+\s*=\s*[\'"][A-Za-z0-9+\/=]{100,})/i',
+			'pattern'  => '/\A\s*\x3c\x3fphp\s*(?:\/\*\s*[a-f0-9]{16,}\s*\*\/|\/\/\s*[a-f0-9]{16,}|\$[a-zA-Z0-9_]+\s*=\s*[\'"][A-Za-z0-9+\/=]{100,})/i',
 			'scope'    => 'php',
 			'clean'    => 'block',
 		),
@@ -244,14 +244,14 @@ function mvn_signatures() {
  */
 function mvn_clean_rules() {
 	return array(
-		// eval(base64_decode(...)); and friends — full statement until first `;` after closing parens.
+		// eval + base64/gzinflate decoder statements.
 		'/[ \t]*(?:@\s*)?\b(?:eval|assert)\s*\(\s*(?:\/\*[^*]*\*\/\s*)*(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|rawurldecode|hex2bin)\s*\([^;]*\)\s*\)\s*;/i' => "\n",
 		// eval($_POST[...]);
 		'/[ \t]*(?:@\s*)?\b(?:eval|assert)\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE|SERVER)[^;]*\)\s*;/i' => "\n",
 		// system/exec/shell_exec from request
 		'/[ \t]*\b(?:system|exec|shell_exec|passthru)\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)[^;]*\)\s*;/i' => "\n",
-		// variable function from request: $x($_GET[..]);
-		'/[ \t]*\$\$?[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)[^;]*\)\s*;/i' => "\n",
+		// variable function from request (not $this->$method).
+		'/[ \t]*(?<!\->)\$\$?[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)[^;]*\)\s*;/i' => "\n",
 		// include with hex-obfuscated path
 		'/[ \t]*@?\b(?:include|require)(?:_once)?\s*\(?\s*["\'](?:\\\\x[0-9a-f]{2}){4,}[^"\']*["\']\s*\)?\s*;/i' => "\n",
 		// preg_replace with /e modifier executing request data

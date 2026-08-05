@@ -175,6 +175,17 @@
     runFixBatch(filter, total);
   });
 
+  $('#mvn-fix-clear').on('click', function () {
+    if (!window.confirm('لیست مشکلات فعلی پاک شود؟ (برای نتایج به‌روز، بعداً اسکن مجدد بزنید)')) return;
+    post('mvn_fix_clear').done(function (res) {
+      if (res && res.success) {
+        window.location.reload();
+      } else {
+        alert((res && res.data && res.data.message) || MVN.i18n.error);
+      }
+    });
+  });
+
   /* ---------- Core repair ---------- */
   function runCoreLoop() {
     post('mvn_core_tick')
@@ -230,6 +241,81 @@
       .fail(function () {
         notice($('#mvn-core-result'), 'خطای ارتباط', false);
         $btn.prop('disabled', false);
+      });
+  });
+
+  /* ---------- Plugin repair (WordPress.org) ---------- */
+  var pluginRepairSlug = '';
+
+  function runPluginLoop() {
+    post('mvn_plugin_tick')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-plugin-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('.mvn-plugin-repair').prop('disabled', false);
+          return;
+        }
+        var s = res.data;
+        var p = pct(s.cursor, s.total);
+        $('#mvn-plugin-bar').css('width', p + '%');
+        $('#mvn-plugin-pct').text(p + '%');
+        $('#mvn-plugin-label').text(
+          (s.name || s.slug) + ' — نوشته‌شده: ' + s.written + ' | ' + s.cursor + '/' + s.total
+        );
+        if (s.status === 'running') {
+          setTimeout(runPluginLoop, 80);
+        } else if (s.status === 'done') {
+          var msg = 'تعمیر «' + (s.name || s.slug) + '» تمام شد. نوشته‌شده: ' + s.written;
+          if (s.skipped) msg += ' | ردشده (یکسان): ' + s.skipped;
+          if (s.errors && s.errors.length) {
+            msg += ' — خطاها: ' + s.errors.join(' | ');
+            notice($('#mvn-plugin-result'), msg, false);
+          } else {
+            notice($('#mvn-plugin-result'), msg, true);
+          }
+          $('.mvn-plugin-repair').prop('disabled', false);
+          setTimeout(function () { window.location.reload(); }, 1200);
+        } else {
+          notice($('#mvn-plugin-result'), 'خطا در تعمیر پلاگین', false);
+          $('.mvn-plugin-repair').prop('disabled', false);
+        }
+      })
+      .fail(function () {
+        notice($('#mvn-plugin-result'), 'خطای ارتباط', false);
+        $('.mvn-plugin-repair').prop('disabled', false);
+      });
+  }
+
+  $(document).on('click', '.mvn-plugin-repair', function () {
+    var slug = $(this).data('slug');
+    var name = $(this).data('name') || slug;
+    if (!slug) return;
+    if (
+      !window.confirm(
+        'پلاگین «' + name + '» از مخزن wordpress.org دانلود و جایگزین شود؟\nنسخه فعلی قبل از جایگزینی پشتیبان‌گیری می‌شود.'
+      )
+    ) {
+      return;
+    }
+    pluginRepairSlug = slug;
+    $('.mvn-plugin-repair').prop('disabled', true);
+    $('#mvn-plugin-progress').show();
+    $('#mvn-plugin-result').empty();
+    $('#mvn-plugin-bar').css('width', '0%');
+    $('#mvn-plugin-label').text('در حال دانلود از wordpress.org...');
+
+    post('mvn_plugin_start', { slug: slug })
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-plugin-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('.mvn-plugin-repair').prop('disabled', false);
+          return;
+        }
+        setTimeout(runPluginLoop, 50);
+      })
+      .fail(function () {
+        notice($('#mvn-plugin-result'), 'خطای ارتباط (دانلود ممکن است طول بکشد)', false);
+        $('.mvn-plugin-repair').prop('disabled', false);
       });
   });
 

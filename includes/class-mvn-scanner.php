@@ -154,6 +154,10 @@ class MVN_Scanner {
 	 * Scan a single relative path and append findings to $state.
 	 */
 	private static function scan_one( $rel, $sigs, &$state ) {
+		if ( mvn_is_skippable_scan_file( $rel ) ) {
+			return;
+		}
+
 		$abs = mvn_abs_path( $rel );
 		if ( ! $abs || ! is_file( $abs ) || ! is_readable( $abs ) ) {
 			return;
@@ -252,6 +256,10 @@ class MVN_Scanner {
 			}
 			if ( @preg_match( $sig['pattern'], $content, $m, PREG_OFFSET_CAPTURE ) ) {
 				$offset = isset( $m[0][1] ) ? (int) $m[0][1] : 0;
+				$match  = isset( $m[0][0] ) ? $m[0][0] : '';
+				if ( self::is_false_positive( $sig['id'], $rel, $content, $offset, $match ) ) {
+					continue;
+				}
 				$action = 'none' === $sig['clean'] ? 'quarantine' : 'clean';
 				if ( $is_htaccess && 'none' === $sig['clean'] ) {
 					$action = 'delete_htaccess';
@@ -318,6 +326,46 @@ class MVN_Scanner {
 		$chunk = substr( $content, $start, $len );
 		$chunk = preg_replace( '/\s+/', ' ', $chunk );
 		return mb_substr( $chunk, 0, $len );
+	}
+
+	/**
+	 * Drop known false positives (legitimate plugin / security-tool code).
+	 */
+	private static function is_false_positive( $sig_id, $rel, $content, $offset, $match ) {
+		switch ( $sig_id ) {
+			case 'variable_variables_eval':
+				// Allow OOP dynamic calls like $this->$action( $_REQUEST ) in Elementor etc.
+				if ( $offset >= 2 && '->' === substr( $content, $offset - 2, 2 ) ) {
+					return true;
+				}
+				if ( $offset >= 3 && '->' === substr( $content, $offset - 3, 2 ) ) {
+					return true;
+				}
+				break;
+
+			case 'chr_chain':
+				// gzip magic header: chr(31).chr(139)...
+				if ( preg_match( '/\bchr\s*\(\s*31\s*\)\s*\.\s*chr\s*\(\s*139\s*\)/i', $match ) ) {
+					return true;
+				}
+				break;
+
+			case 'webshell_markers':
+				// Security plugins embed attack names inside WAF rule patterns.
+				if ( preg_match( '/wfWAFRule|Wordfence|#\\^/i', substr( $content, max( 0, $offset - 120 ), 240 ) ) ) {
+					return true;
+				}
+				break;
+
+			case 'long_base64_blob':
+				// Benign charset / alphabet tables (not base64 payloads).
+				if ( preg_match( '/alphabet|charset|dictionary|keyspace/i', substr( $content, max( 0, $offset - 80 ), 160 ) ) ) {
+					return true;
+				}
+				break;
+		}
+
+		return (bool) apply_filters( 'mvn_scan_false_positive', false, $sig_id, $rel, $content, $offset, $match );
 	}
 
 	/**
