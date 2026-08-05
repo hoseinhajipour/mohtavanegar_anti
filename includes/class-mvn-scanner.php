@@ -18,8 +18,18 @@ class MVN_Scanner {
 	 * @param array $opts {scope: all|wp-content|core, deep: bool}
 	 */
 	public static function start( $opts = array() ) {
-		$scope = isset( $opts['scope'] ) ? $opts['scope'] : 'all';
-		$deep  = ! empty( $opts['deep'] );
+		$scope       = isset( $opts['scope'] ) ? $opts['scope'] : 'all';
+		$deep        = ! empty( $opts['deep'] );
+		$incremental = ! isset( $opts['incremental'] ) || ! empty( $opts['incremental'] );
+		$full        = ! empty( $opts['full'] );
+		$scan_db     = ! isset( $opts['scan_db'] ) || ! empty( $opts['scan_db'] );
+		$scan_core   = ! isset( $opts['scan_core'] ) || ! empty( $opts['scan_core'] );
+		if ( 'wp-content' === $scope ) {
+			$scan_core = false;
+		}
+		if ( $full ) {
+			$incremental = false;
+		}
 
 		$files = array();
 		if ( 'wp-content' === $scope || 'all' === $scope ) {
@@ -73,17 +83,50 @@ class MVN_Scanner {
 		}
 		$filtered = array_values( array_unique( $filtered ) );
 
+		// Incremental: skip unchanged files that were clean in the last scan.
+		$to_scan           = array();
+		$skipped_unchanged = 0;
+		foreach ( $filtered as $rel ) {
+			if ( ! $incremental ) {
+				$to_scan[] = $rel;
+				continue;
+			}
+			$abs = mvn_abs_path( $rel );
+			if ( ! $abs || ! is_file( $abs ) ) {
+				$to_scan[] = $rel;
+				continue;
+			}
+			$mtime = @filemtime( $abs );
+			$size  = @filesize( $abs );
+			if ( false === $mtime || false === $size ) {
+				$to_scan[] = $rel;
+				continue;
+			}
+			if ( MVN_File_Index::is_unchanged_clean( $rel, $mtime, $size ) ) {
+				$skipped_unchanged++;
+				continue;
+			}
+			$to_scan[] = $rel;
+		}
+
 		$state = array(
 			'id'          => gmdate( 'YmdHis' ) . '-' . wp_generate_password( 6, false ),
 			'started_at'  => gmdate( 'c' ),
 			'updated_at'  => gmdate( 'c' ),
 			'scope'       => $scope,
 			'deep'        => $deep,
+			'incremental' => $incremental ? 1 : 0,
+			'scan_db'     => $scan_db ? 1 : 0,
+			'scan_core'   => $scan_core ? 1 : 0,
+			'phase'       => 'files',
+			'catalog'     => count( $filtered ),
+			'skipped_unchanged' => $skipped_unchanged,
 			'status'      => 'running',
-			'total'       => count( $filtered ),
+			'total'       => count( $to_scan ),
 			'processed'   => 0,
 			'cursor'      => 0,
-			'files'       => $filtered,
+			'files'       => $to_scan,
+			'all_files'   => $filtered,
 			'issues'      => array(),
 			'stats'       => array(
 				'critical' => 0,
@@ -92,11 +135,13 @@ class MVN_Scanner {
 				'htaccess' => 0,
 				'php'      => 0,
 				'js'       => 0,
+				'db'       => 0,
+				'core'     => 0,
 			),
 		);
 		mvn_state_write( self::STATE_KEY, $state );
 		update_option( MVN_OPTION_LASTSCAN, array( 'id' => $state['id'], 'started_at' => $state['started_at'] ), false );
-		mvn_log( 'Scan started: ' . $state['id'] . ' files=' . $state['total'] );
+		mvn_log( 'Scan started: ' . $state['id'] . ' catalog=' . count( $filtered ) . ' to_scan=' . $state['total'] . ' skipped=' . $skipped_unchanged );
 		return $state;
 	}
 
@@ -106,6 +151,32 @@ class MVN_Scanner {
 	public static function tick() {
 		$state = mvn_state_read( self::STATE_KEY );
 		if ( empty( $state ) || empty( $state['status'] ) || 'running' !== $state['status'] ) {
+			return $state;
+		}
+
+		$phase = isset( $state['phase'] ) ? $state['phase'] : 'files';
+
+		if ( 'core' === $phase ) {
+			MVN_Core_Integrity::tick( $state );
+			$state['updated_at'] = gmdate( 'c' );
+			if ( MVN_Core_Integrity::is_done( $state ) ) {
+				$state['core_files']  = array();
+				$state['core_extras'] = array();
+				self::after_core_phase( $state );
+			} else {
+				mvn_state_write( self::STATE_KEY, $state );
+			}
+			return $state;
+		}
+
+		if ( 'db' === $phase ) {
+			MVN_DB_Scanner::tick( $state );
+			$state['updated_at'] = gmdate( 'c' );
+			if ( MVN_DB_Scanner::is_done( $state ) ) {
+				self::finish_scan( $state );
+			} else {
+				mvn_state_write( self::STATE_KEY, $state );
+			}
 			return $state;
 		}
 
@@ -120,34 +191,106 @@ class MVN_Scanner {
 			self::scan_one( $rel, $sigs, $state );
 		}
 
+		MVN_File_Index::flush();
+
 		$state['cursor']     = $end;
 		$state['processed']  = $end;
 		$state['updated_at'] = gmdate( 'c' );
 
 		if ( $end >= $total ) {
-			$state['status']       = 'done';
-			$state['finished_at']  = gmdate( 'c' );
-			// Persist final issues to WP option for Fix page.
-			update_option( MVN_OPTION_ISSUES, $state['issues'], false );
-			update_option(
-				MVN_OPTION_LASTSCAN,
-				array(
-					'id'          => $state['id'],
-					'started_at'  => $state['started_at'],
-					'finished_at' => $state['finished_at'],
-					'total'       => $state['total'],
-					'stats'       => $state['stats'],
-					'issue_count' => count( $state['issues'] ),
-				),
-				false
-			);
-			mvn_log( 'Scan done: issues=' . count( $state['issues'] ) );
-			// Free the huge files list from state (keep issues).
-			$state['files'] = array();
+			self::after_files_phase( $state );
+		} else {
+			mvn_state_write( self::STATE_KEY, $state );
 		}
 
-		mvn_state_write( self::STATE_KEY, $state );
 		return $state;
+	}
+
+	/**
+	 * File phase finished — move to core checksum, DB, or finalize.
+	 */
+	private static function after_files_phase( &$state ) {
+		MVN_File_Index::flush();
+		if ( ! empty( $state['all_files'] ) ) {
+			MVN_File_Index::prune( $state['all_files'] );
+		}
+		$state['files']          = array();
+		$state['all_files']      = array();
+		$state['file_total']     = isset( $state['total'] ) ? (int) $state['total'] : 0;
+		$state['file_processed'] = isset( $state['processed'] ) ? (int) $state['processed'] : 0;
+
+		if ( self::should_scan_core( $state ) ) {
+			MVN_Core_Integrity::begin_phase( $state );
+			if ( MVN_Core_Integrity::is_done( $state ) ) {
+				$state['core_files']  = array();
+				$state['core_extras'] = array();
+				self::after_core_phase( $state );
+			} else {
+				mvn_state_write( self::STATE_KEY, $state );
+			}
+			return;
+		}
+
+		self::after_core_phase( $state );
+	}
+
+	/**
+	 * Core checksum phase finished — move to DB or finalize.
+	 */
+	private static function after_core_phase( &$state ) {
+		if ( ! empty( $state['scan_db'] ) ) {
+			MVN_DB_Scanner::begin_phase( $state );
+			mvn_state_write( self::STATE_KEY, $state );
+			return;
+		}
+		self::finish_scan( $state );
+	}
+
+	private static function should_scan_core( $state ) {
+		if ( empty( $state['scan_core'] ) ) {
+			return false;
+		}
+		$scope = isset( $state['scope'] ) ? $state['scope'] : 'all';
+		return in_array( $scope, array( 'all', 'core' ), true );
+	}
+
+	/**
+	 * Finalize scan — persist issues and last-scan summary.
+	 */
+	private static function finish_scan( &$state ) {
+		$state['status']      = 'done';
+		$state['finished_at'] = gmdate( 'c' );
+		$issues               = self::sort_issues( $state['issues'] );
+		update_option( MVN_OPTION_ISSUES, $issues, false );
+
+		$file_total  = isset( $state['file_total'] ) ? (int) $state['file_total'] : (int) $state['total'];
+		$db_total    = isset( $state['db_total'] ) ? (int) $state['db_total'] : 0;
+		$core_total  = isset( $state['core_files'] ) && is_array( $state['core_files'] ) ? count( $state['core_files'] ) : 0;
+
+		update_option(
+			MVN_OPTION_LASTSCAN,
+			array(
+				'id'                => $state['id'],
+				'started_at'        => $state['started_at'],
+				'finished_at'       => $state['finished_at'],
+				'total'             => $file_total + $db_total,
+				'file_total'        => $file_total,
+				'db_total'          => $db_total,
+				'catalog'           => isset( $state['catalog'] ) ? $state['catalog'] : $file_total,
+				'skipped_unchanged' => isset( $state['skipped_unchanged'] ) ? $state['skipped_unchanged'] : 0,
+				'incremental'       => ! empty( $state['incremental'] ),
+				'scan_db'           => ! empty( $state['scan_db'] ),
+				'scan_core'         => ! empty( $state['scan_core'] ),
+				'stats'             => $state['stats'],
+				'issue_count'       => count( $issues ),
+			),
+			false
+		);
+		mvn_log( 'Scan done: issues=' . count( $issues ) . ' core=' . ( isset( $state['stats']['core'] ) ? $state['stats']['core'] : 0 ) . ' db=' . ( isset( $state['stats']['db'] ) ? $state['stats']['db'] : 0 ) );
+		$state['issues']    = $issues;
+		$state['files']     = array();
+		$state['all_files'] = array();
+		mvn_state_write( self::STATE_KEY, $state );
 	}
 
 	/**
@@ -164,14 +307,21 @@ class MVN_Scanner {
 		}
 		$size = @filesize( $abs );
 		if ( false === $size || $size > 5 * 1024 * 1024 ) {
-			// Skip >5MB to keep AJAX responsive.
 			return;
+		}
+		$mtime = @filemtime( $abs );
+		if ( false === $mtime ) {
+			$mtime = 0;
 		}
 
 		$content = @file_get_contents( $abs );
 		if ( false === $content || '' === $content ) {
+			MVN_File_Index::mark( $rel, true, $mtime, $size );
 			return;
 		}
+
+		$file_hash  = md5( $content );
+		$had_issues = false;
 
 		$name = basename( $rel );
 		$ext  = strtolower( pathinfo( $rel, PATHINFO_EXTENSION ) );
@@ -222,7 +372,7 @@ class MVN_Scanner {
 				}
 
 				if ( $rogue_hit ) {
-					self::add_issue(
+					if ( self::add_finding(
 						$state,
 						array(
 							'rel'      => $rel,
@@ -232,9 +382,13 @@ class MVN_Scanner {
 							'detail'   => $reason,
 							'action'   => 'delete_htaccess',
 							'snippet'  => self::snippet( $content, 0, 180 ),
-						)
-					);
-					$state['stats']['htaccess']++;
+						),
+						$content,
+						$file_hash
+					) ) {
+						$had_issues = true;
+						$state['stats']['htaccess']++;
+					}
 				}
 			}
 		}
@@ -264,7 +418,7 @@ class MVN_Scanner {
 				if ( $is_htaccess && 'none' === $sig['clean'] ) {
 					$action = 'delete_htaccess';
 				}
-				self::add_issue(
+				if ( ! self::add_finding(
 					$state,
 					array(
 						'rel'      => $rel,
@@ -275,8 +429,13 @@ class MVN_Scanner {
 						'action'   => $action,
 						'clean'    => $sig['clean'],
 						'snippet'  => self::snippet( $content, $offset, 220 ),
-					)
-				);
+					),
+					$content,
+					$file_hash
+				) ) {
+					continue;
+				}
+				$had_issues = true;
 				$key = $sig['severity'];
 				if ( isset( $state['stats'][ $key ] ) ) {
 					$state['stats'][ $key ]++;
@@ -293,7 +452,7 @@ class MVN_Scanner {
 
 		// Extra: PHP files sitting directly inside uploads (almost always malware).
 		if ( $is_php && 0 === strpos( $rel, 'wp-content/uploads/' ) ) {
-			self::add_issue(
+			if ( self::add_finding(
 				$state,
 				array(
 					'rel'      => $rel,
@@ -303,22 +462,101 @@ class MVN_Scanner {
 					'detail'   => 'وجود PHP در uploads تقریباً همیشه نشانه بدافزار است.',
 					'action'   => 'quarantine_delete',
 					'snippet'  => self::snippet( $content, 0, 160 ),
-				)
-			);
-			$state['stats']['critical']++;
-		}
-	}
-
-	private static function add_issue( &$state, $issue ) {
-		// Deduplicate by rel+sig.
-		$key = $issue['rel'] . '|' . $issue['sig'];
-		foreach ( $state['issues'] as $existing ) {
-			if ( $existing['rel'] . '|' . $existing['sig'] === $key ) {
-				return;
+				),
+				$content,
+				$file_hash
+			) ) {
+				$had_issues = true;
+				$state['stats']['critical']++;
 			}
 		}
-		$issue['id'] = md5( $key );
-		$state['issues'][] = $issue;
+
+		MVN_File_Index::mark( $rel, ! $had_issues, $mtime, $size );
+	}
+
+	private static function add_issue( &$state, $issue, $content = '', $file_hash = '' ) {
+		return self::add_finding( $state, $issue, $content, $file_hash );
+	}
+
+	/**
+	 * Add a finding (file or DB) to scan state.
+	 *
+	 * @return bool Whether the finding was added.
+	 */
+	public static function add_finding( &$state, $issue, $content = '', $value_hash = '' ) {
+		$rel = isset( $issue['rel'] ) ? $issue['rel'] : '';
+		$sig = isset( $issue['sig'] ) ? $issue['sig'] : '';
+
+		if ( MVN_Ignore_List::is_ignored( $rel, $sig, $value_hash ) ) {
+			return false;
+		}
+
+		// Deduplicate by rel+sig.
+		$key = $rel . '|' . $sig;
+		foreach ( $state['issues'] as $existing ) {
+			if ( $existing['rel'] . '|' . $existing['sig'] === $key ) {
+				return false;
+			}
+		}
+
+		if ( empty( $issue['source'] ) ) {
+			$issue['source'] = ( 0 === strpos( $rel, 'db:' ) ) ? 'db' : 'file';
+		}
+
+		$severity   = isset( $issue['severity'] ) ? $issue['severity'] : 'warning';
+		$confidence = mvn_compute_confidence( $sig, $severity, $rel, $content );
+
+		$issue['id']          = md5( $key );
+		$issue['confidence']  = $confidence;
+		$issue['conf_label']  = mvn_confidence_label( $confidence );
+		$issue['file_hash']   = $value_hash;
+		$issue['content_hash'] = $value_hash;
+		$state['issues'][]    = $issue;
+		return true;
+	}
+
+	/**
+	 * Drop known false positives for DB content.
+	 */
+	public static function is_db_false_positive( $sig_id, $table, $row, $column, $content, $offset, $match ) {
+		if ( 'options' === $table && 'option_value' === $column ) {
+			$name = isset( $row['option_name'] ) ? $row['option_name'] : '';
+			if ( in_array( $name, mvn_db_protected_options(), true ) && in_array( $sig_id, array( 'long_base64_blob', 'chr_chain', 'create_function' ), true ) ) {
+				return true;
+			}
+		}
+		if ( 'postmeta' === $table && isset( $row['meta_key'] ) ) {
+			$key = $row['meta_key'];
+			if ( 0 === strpos( $key, '_elementor' ) || 0 === strpos( $key, '_wp_' ) ) {
+				if ( in_array( $sig_id, array( 'long_base64_blob', 'chr_chain' ), true ) ) {
+					return true;
+				}
+			}
+		}
+		return (bool) apply_filters( 'mvn_db_scan_false_positive', false, $sig_id, $table, $row, $column, $content, $offset, $match );
+	}
+
+	public static function sort_issues( $issues ) {
+		if ( ! is_array( $issues ) ) {
+			return array();
+		}
+		usort(
+			$issues,
+			function ( $a, $b ) {
+				$ca = isset( $a['confidence'] ) ? (int) $a['confidence'] : 0;
+				$cb = isset( $b['confidence'] ) ? (int) $b['confidence'] : 0;
+				if ( $ca !== $cb ) {
+					return $cb - $ca;
+				}
+				$sa = isset( $a['severity'] ) ? $a['severity'] : '';
+				$sb = isset( $b['severity'] ) ? $b['severity'] : '';
+				$rank = array( 'critical' => 3, 'warning' => 2, 'info' => 1 );
+				$ra   = isset( $rank[ $sa ] ) ? $rank[ $sa ] : 0;
+				$rb   = isset( $rank[ $sb ] ) ? $rank[ $sb ] : 0;
+				return $rb - $ra;
+			}
+		);
+		return $issues;
 	}
 
 	private static function snippet( $content, $offset, $len ) {
@@ -333,19 +571,35 @@ class MVN_Scanner {
 	 */
 	private static function is_false_positive( $sig_id, $rel, $content, $offset, $match ) {
 		switch ( $sig_id ) {
+			case 'chr_chain':
+				// gzip / tar magic bytes: chr(31).chr(139)...
+				$ctx = substr( $content, max( 0, $offset - 30 ), strlen( $match ) + 120 );
+				if ( preg_match( '/\bchr\s*\(\s*31\s*\)/i', $ctx ) && preg_match( '/\bchr\s*\(\s*139\s*\)/i', $ctx ) ) {
+					return true;
+				}
+				if ( preg_match( '/tar-archiver|gzencode|gzcompress|NOSONAR/i', $ctx ) ) {
+					return true;
+				}
+				break;
+
+			case 'hidden_iframe':
+				// WordPress embed, Plupload/Moxie upload shim, sandboxed iframes.
+				if ( preg_match( '/\bsandbox=|wp-embed|plupload|moxie|src\s*=\s*["\']javascript:/i', $match ) ) {
+					return true;
+				}
+				break;
+
 			case 'variable_variables_eval':
+				// Comments mentioning $_REQUEST (e.g. wp-settings.php).
+				$before = substr( $content, max( 0, $offset - 120 ), min( 120, $offset ) );
+				if ( preg_match( '/\/\/|\/\*|\*/', $before ) && false === strpos( substr( $content, $offset, 80 ), ';' ) ) {
+					return true;
+				}
 				// Allow OOP dynamic calls like $this->$action( $_REQUEST ) in Elementor etc.
 				if ( $offset >= 2 && '->' === substr( $content, $offset - 2, 2 ) ) {
 					return true;
 				}
 				if ( $offset >= 3 && '->' === substr( $content, $offset - 3, 2 ) ) {
-					return true;
-				}
-				break;
-
-			case 'chr_chain':
-				// gzip magic header: chr(31).chr(139)...
-				if ( preg_match( '/\bchr\s*\(\s*31\s*\)\s*\.\s*chr\s*\(\s*139\s*\)/i', $match ) ) {
 					return true;
 				}
 				break;
@@ -406,10 +660,84 @@ class MVN_Scanner {
 
 	public static function get_issues() {
 		$issues = get_option( MVN_OPTION_ISSUES, array() );
-		return is_array( $issues ) ? $issues : array();
+		if ( ! is_array( $issues ) ) {
+			return array();
+		}
+		return self::sort_issues( $issues );
 	}
 
 	public static function clear_issues() {
 		update_option( MVN_OPTION_ISSUES, array(), false );
+	}
+
+	/**
+	 * Mark a finding as safe (ignore list) and remove from open issues.
+	 *
+	 * @param string $id       Issue id (md5 of rel|sig).
+	 * @param bool   $permanent Ignore even if file content changes.
+	 * @return true|WP_Error
+	 */
+	public static function ignore_issue( $id, $permanent = false ) {
+		$id     = sanitize_text_field( $id );
+		$issues = get_option( MVN_OPTION_ISSUES, array() );
+		if ( ! is_array( $issues ) ) {
+			$issues = array();
+		}
+
+		$found = null;
+		$kept  = array();
+		foreach ( $issues as $issue ) {
+			if ( isset( $issue['id'] ) && $issue['id'] === $id ) {
+				$found = $issue;
+				continue;
+			}
+			$kept[] = $issue;
+		}
+
+		if ( ! $found ) {
+			return new WP_Error( 'mvn_not_found', 'یافته یافت نشد.' );
+		}
+
+		$hash = '';
+		if ( ! empty( $found['content_hash'] ) ) {
+			$hash = $found['content_hash'];
+		} elseif ( ! empty( $found['file_hash'] ) ) {
+			$hash = $found['file_hash'];
+		}
+
+		MVN_Ignore_List::add(
+			isset( $found['rel'] ) ? $found['rel'] : '',
+			isset( $found['sig'] ) ? $found['sig'] : '',
+			$hash,
+			$permanent
+		);
+
+		update_option( MVN_OPTION_ISSUES, self::sort_issues( $kept ), false );
+
+		$rel = isset( $found['rel'] ) ? $found['rel'] : '';
+		$is_db = ( ! empty( $found['source'] ) && 'db' === $found['source'] ) || ( 0 === strpos( $rel, 'db:' ) );
+		if ( $rel && ! $is_db ) {
+			$has_more = false;
+			foreach ( $kept as $issue ) {
+				if ( isset( $issue['rel'] ) && $issue['rel'] === $rel ) {
+					$has_more = true;
+					break;
+				}
+			}
+			if ( ! $has_more ) {
+				$abs = mvn_abs_path( $rel );
+				if ( $abs && is_file( $abs ) ) {
+					$mtime = @filemtime( $abs );
+					$size  = @filesize( $abs );
+					if ( false !== $mtime && false !== $size ) {
+						MVN_File_Index::mark( $rel, true, $mtime, $size );
+						MVN_File_Index::flush();
+					}
+				}
+			}
+		}
+
+		mvn_log( 'Issue ignored: ' . $id . ( $permanent ? ' (permanent)' : '' ) );
+		return true;
 	}
 }

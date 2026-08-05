@@ -5,6 +5,46 @@ if ( ! defined( 'ABSPATH' ) ) {
 ?>
 <div class="mvn-grid mvn-grid-2">
 	<div class="mvn-card">
+		<h2>بررسی یکپارچگی هسته (Core Checksum)</h2>
+		<p>
+			فایل‌های <code>wp-admin</code>، <code>wp-includes</code> و فایل‌های ریشه هسته با
+			<strong>MD5 رسمی wordpress.org</strong> مقایسه می‌شوند.
+			فایل‌های <em>تغییر یافته</em>، <em>گم‌شده</em> یا <em>اضافی</em> گزارش می‌شوند.
+		</p>
+		<?php if ( ! empty( $integrity ) ) : ?>
+		<ul class="mvn-kv">
+			<li>
+				<span>آخرین بررسی</span>
+				<b class="<?php echo ! empty( $integrity['ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+					<?php
+					if ( ! empty( $integrity['ok'] ) ) {
+						echo 'سالم';
+					} else {
+						echo (int) ( isset( $integrity['total'] ) ? $integrity['total'] : 0 ) . ' مشکل';
+					}
+					?>
+				</b>
+			</li>
+			<?php if ( empty( $integrity['ok'] ) ) : ?>
+			<li><span>تغییر یافته</span><b><?php echo (int) ( isset( $integrity['modified'] ) ? $integrity['modified'] : 0 ); ?></b></li>
+			<li><span>گم‌شده</span><b><?php echo (int) ( isset( $integrity['missing'] ) ? $integrity['missing'] : 0 ); ?></b></li>
+			<li><span>اضافی</span><b><?php echo (int) ( isset( $integrity['extra'] ) ? $integrity['extra'] : 0 ); ?></b></li>
+			<?php endif; ?>
+			<li><span>منبع checksum</span><b><?php echo esc_html( isset( $integrity['source'] ) ? $integrity['source'] : '—' ); ?></b></li>
+		</ul>
+		<?php endif; ?>
+		<button type="button" class="button button-primary" id="mvn-integrity-start">شروع بررسی checksum</button>
+		<div id="mvn-integrity-progress" class="mvn-progress-wrap" style="display:none;margin-top:16px">
+			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-integrity-bar" style="width:0%"></div></div>
+			<div class="mvn-progress-meta">
+				<span id="mvn-integrity-label">...</span>
+				<span id="mvn-integrity-pct">0%</span>
+			</div>
+		</div>
+		<div id="mvn-integrity-result" style="margin-top:12px"></div>
+	</div>
+
+	<div class="mvn-card">
 		<h2>تعمیر فایل‌های هسته وردپرس</h2>
 		<p>
 			فایل‌های <code>wp-admin</code>، <code>wp-includes</code> و فایل‌های ریشه هسته از

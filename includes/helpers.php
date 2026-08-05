@@ -135,10 +135,42 @@ function mvn_is_self_plugin_path( $rel ) {
 }
 
 /**
+ * WordPress core file paths (repaired from bundled zip — not signature-scanned).
+ */
+function mvn_core_root_files() {
+	return array(
+		'index.php',
+		'wp-load.php',
+		'wp-settings.php',
+		'wp-blog-header.php',
+		'wp-cron.php',
+		'wp-login.php',
+		'wp-signup.php',
+		'wp-trackback.php',
+		'wp-comments-post.php',
+		'wp-mail.php',
+		'wp-activate.php',
+		'xmlrpc.php',
+		'wp-links-opml.php',
+	);
+}
+
+function mvn_is_core_path( $rel ) {
+	$rel = trim( str_replace( '\\', '/', (string) $rel ), '/' );
+	if ( 0 === strpos( $rel, 'wp-admin/' ) || 0 === strpos( $rel, 'wp-includes/' ) ) {
+		return true;
+	}
+	return in_array( $rel, mvn_core_root_files(), true );
+}
+
+/**
  * Should this file be excluded from malware signature scanning?
  */
 function mvn_is_skippable_scan_file( $rel ) {
 	$rel = trim( str_replace( '\\', '/', (string) $rel ), '/' );
+	if ( mvn_is_core_path( $rel ) ) {
+		return true;
+	}
 	if ( mvn_is_self_plugin_path( $rel ) ) {
 		return true;
 	}

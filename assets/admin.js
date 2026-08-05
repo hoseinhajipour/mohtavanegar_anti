@@ -32,6 +32,40 @@
     );
   }
 
+  function scanStatsText(s) {
+    var st = s.stats || {};
+    var parts = [
+      'بحرانی: ' + (st.critical || 0),
+      'هشدار: ' + (st.warning || 0),
+      'htaccess: ' + (st.htaccess || 0),
+      'PHP: ' + (st.php || 0),
+    ];
+    if (s.incremental && (s.skipped_unchanged || s.catalog)) {
+      parts.push('ردشده (بدون تغییر): ' + (s.skipped_unchanged || 0));
+      if (s.catalog) {
+        parts.push('کاتالوگ: ' + s.catalog);
+      }
+    }
+    if (s.stats && s.stats.db) {
+      parts.push('DB: ' + s.stats.db);
+    }
+    if (s.stats && s.stats.core) {
+      parts.push('Core: ' + s.stats.core);
+    }
+    return parts.join(' | ');
+  }
+
+  function scanPhaseLabel(s) {
+    if (s.phase === 'core') {
+      var extra = s.core_version ? ' (WP ' + s.core_version + ')' : '';
+      return 'checksum هسته' + extra;
+    }
+    if (s.phase === 'db') {
+      return 'دیتابیس — ' + (s.db_phase_label || s.db_phase || '...');
+    }
+    return 'فایل‌ها';
+  }
+
   /* ---------- Scan ---------- */
   function runScanLoop() {
     post('mvn_scan_tick')
@@ -44,20 +78,12 @@
         var p = pct(s.processed, s.total);
         $('#mvn-scan-bar').css('width', p + '%');
         $('#mvn-scan-pct').text(p + '%');
-        $('#mvn-scan-label').text(
-          'بررسی‌شده: ' + s.processed + ' / ' + s.total + ' — یافته‌ها: ' + s.issue_count
-        );
-        var st = s.stats || {};
-        $('#mvn-scan-stats').text(
-          'بحرانی: ' +
-            (st.critical || 0) +
-            ' | هشدار: ' +
-            (st.warning || 0) +
-            ' | htaccess: ' +
-            (st.htaccess || 0) +
-            ' | PHP: ' +
-            (st.php || 0)
-        );
+        var label = scanPhaseLabel(s) + ' — بررسی‌شده: ' + s.processed + ' / ' + s.total + ' — یافته‌ها: ' + s.issue_count;
+        if (s.incremental && s.skipped_unchanged) {
+          label += ' — ردشده: ' + s.skipped_unchanged;
+        }
+        $('#mvn-scan-label').text(label);
+        $('#mvn-scan-stats').text(scanStatsText(s));
 
         if (s.status === 'running') {
           setTimeout(runScanLoop, 80);
@@ -66,7 +92,11 @@
           var html =
             '<div class="mvn-notice mvn-notice-ok">اسکن تمام شد. تعداد مشکلات: <b>' +
             s.issue_count +
-            '</b>. ';
+            '</b>';
+          if (s.incremental && s.skipped_unchanged) {
+            html += ' — ردشده (بدون تغییر): <b>' + s.skipped_unchanged + '</b>';
+          }
+          html += '. ';
           if (s.issue_count > 0) {
             html +=
               '<a href="admin.php?page=mvn-fix">رفتن به صفحه رفع مشکلات</a>';
@@ -85,6 +115,18 @@
       });
   }
 
+  $('#mvn-scan-full').on('change', function () {
+    if ($(this).is(':checked')) {
+      $('#mvn-scan-incremental').prop('checked', false);
+    }
+  });
+
+  $('#mvn-scan-incremental').on('change', function () {
+    if ($(this).is(':checked')) {
+      $('#mvn-scan-full').prop('checked', false);
+    }
+  });
+
   $('#mvn-scan-start').on('click', function () {
     var $btn = $(this);
     $btn.prop('disabled', true);
@@ -93,9 +135,14 @@
     $('#mvn-scan-bar').css('width', '0%');
     $('#mvn-scan-label').text(MVN.i18n.scanning);
 
+    var full = $('#mvn-scan-full').is(':checked');
     post('mvn_scan_start', {
       scope: $('#mvn-scan-scope').val(),
       deep: $('#mvn-scan-deep').is(':checked') ? 1 : 0,
+      incremental: full ? 0 : $('#mvn-scan-incremental').is(':checked') ? 1 : 0,
+      full: full ? 1 : 0,
+      scan_db: $('#mvn-scan-db').is(':checked') ? 1 : 0,
+      scan_core: $('#mvn-scan-core').is(':checked') ? 1 : 0,
     })
       .done(function (res) {
         if (!res || !res.success) {
@@ -108,6 +155,33 @@
       .fail(function () {
         notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
         $btn.prop('disabled', false);
+      });
+  });
+
+  /* ---------- Ignore (mark safe) ---------- */
+  $(document).on('click', '.mvn-ignore-one', function () {
+    if (!window.confirm(MVN.i18n.confirm_ignore || MVN.i18n.confirm)) return;
+    var $btn = $(this);
+    var id = $btn.data('id');
+    var $row = $btn.closest('tr');
+    $btn.prop('disabled', true).text(MVN.i18n.ignoring || '...');
+    post('mvn_fix_ignore', { id: id })
+      .done(function (res) {
+        if (res && res.success) {
+          $row.fadeOut(200, function () {
+            $(this).remove();
+            if (!$('#mvn-issues-table tbody tr').length) {
+              window.location.reload();
+            }
+          });
+        } else {
+          alert((res && res.data && res.data.message) || MVN.i18n.error);
+          $btn.prop('disabled', false).text('امن است');
+        }
+      })
+      .fail(function () {
+        alert('خطای ارتباط');
+        $btn.prop('disabled', false).text('امن است');
       });
   });
 
@@ -167,7 +241,7 @@
       });
   }
 
-  $('#mvn-fix-all, #mvn-fix-htaccess, #mvn-fix-clean, #mvn-fix-uploads').on('click', function () {
+  $('#mvn-fix-all, #mvn-fix-htaccess, #mvn-fix-clean, #mvn-fix-uploads, #mvn-fix-db-clean, #mvn-fix-db-option').on('click', function () {
     if (!window.confirm(MVN.i18n.confirm)) return;
     var filter = $(this).data('filter') || '';
     var total = $('#mvn-issues-table tbody tr').length;
@@ -184,6 +258,76 @@
         alert((res && res.data && res.data.message) || MVN.i18n.error);
       }
     });
+  });
+
+  $('#mvn-scan-scope').on('change', function () {
+    var isContentOnly = $(this).val() === 'wp-content';
+    $('#mvn-scan-core').prop('disabled', isContentOnly);
+    if (isContentOnly) {
+      $('#mvn-scan-core').prop('checked', false);
+    }
+  });
+
+  /* ---------- Core integrity (standalone) ---------- */
+  function runIntegrityLoop() {
+    post('mvn_core_integrity_tick')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-integrity-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('#mvn-integrity-start').prop('disabled', false);
+          return;
+        }
+        var s = res.data;
+        var p = pct(s.processed, s.total);
+        $('#mvn-integrity-bar').css('width', p + '%');
+        $('#mvn-integrity-pct').text(p + '%');
+        $('#mvn-integrity-label').text(
+          (s.core_sub === 'extras' ? 'فایل‌های اضافی' : 'بررسی checksum') +
+            ' — ' + s.processed + '/' + s.total +
+            ' — یافته‌ها: ' + s.issue_count +
+            (s.core_source ? ' [' + s.core_source + ']' : '')
+        );
+        if (s.status === 'running') {
+          setTimeout(runIntegrityLoop, 80);
+        } else if (s.status === 'done') {
+          var msg = 'بررسی checksum تمام شد. مشکلات: <b>' + s.issue_count + '</b>';
+          if (s.issue_count > 0) {
+            msg += ' — <a href="admin.php?page=mvn-fix">رفتن به رفع مشکلات</a>';
+          } else {
+            msg += ' — هسته سالم است.';
+          }
+          notice($('#mvn-integrity-result'), msg, s.issue_count === 0);
+          $('#mvn-integrity-start').prop('disabled', false);
+          if (s.issue_count > 0) {
+            setTimeout(function () { window.location.reload(); }, 1500);
+          }
+        }
+      })
+      .fail(function () {
+        notice($('#mvn-integrity-result'), 'خطای ارتباط', false);
+        $('#mvn-integrity-start').prop('disabled', false);
+      });
+  }
+
+  $('#mvn-integrity-start').on('click', function () {
+    var $btn = $(this);
+    $btn.prop('disabled', true);
+    $('#mvn-integrity-progress').show();
+    $('#mvn-integrity-result').empty();
+    $('#mvn-integrity-bar').css('width', '0%');
+    post('mvn_core_integrity_start')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-integrity-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $btn.prop('disabled', false);
+          return;
+        }
+        setTimeout(runIntegrityLoop, 50);
+      })
+      .fail(function () {
+        notice($('#mvn-integrity-result'), 'خطای ارتباط', false);
+        $btn.prop('disabled', false);
+      });
   });
 
   /* ---------- Core repair ---------- */
@@ -449,6 +593,107 @@
   });
 
   /* ---------- Quarantine ---------- */
+  function quarantineSelectedIds() {
+    return $('#mvn-quarantine-table tbody .mvn-q-check:checked')
+      .map(function () {
+        return $(this).val();
+      })
+      .get();
+  }
+
+  function quarantineUpdateBulkUi() {
+    var n = quarantineSelectedIds().length;
+    $('#mvn-q-restore-selected, #mvn-q-purge-selected').prop('disabled', n === 0);
+    $('#mvn-q-selected-count').text(n > 0 ? n + ' مورد انتخاب شده' : '');
+    var total = $('#mvn-quarantine-table tbody .mvn-q-check').length;
+    var checked = $('#mvn-quarantine-table tbody .mvn-q-check:checked').length;
+    $('#mvn-q-select-all').prop('checked', total > 0 && checked === total);
+  }
+
+  $(document).on('change', '#mvn-q-select-all', function () {
+    var on = $(this).is(':checked');
+    $('#mvn-quarantine-table tbody .mvn-q-check').prop('checked', on);
+    quarantineUpdateBulkUi();
+  });
+
+  $(document).on('change', '.mvn-q-check', function () {
+    quarantineUpdateBulkUi();
+  });
+
+  function runQuarantineBatch(action, ids, totalHint) {
+    if (!ids.length) return;
+    $('#mvn-q-progress').show();
+    $('#mvn-q-restore-selected, #mvn-q-purge-selected, #mvn-q-select-all').prop('disabled', true);
+
+    post('mvn_quarantine_batch', {
+      batch_action: action,
+      ids: ids,
+    })
+      .done(function (res) {
+        if (!res || !res.success) {
+          $('#mvn-q-label').text((res && res.data && res.data.message) || MVN.i18n.error);
+          quarantineUpdateBulkUi();
+          return;
+        }
+        var r = res.data;
+        var remaining = r.remaining_ids || [];
+        var remCount = r.remaining !== undefined ? r.remaining : remaining.length;
+        var doneTotal = totalHint ? totalHint - remCount : r.done;
+        var p = totalHint ? pct(doneTotal, totalHint) : 50;
+        $('#mvn-q-bar').css('width', p + '%');
+        var label =
+          (action === 'restore' ? 'بازیابی' : 'حذف') +
+          ' — انجام‌شده: ' +
+          r.done +
+          ' | ناموفق: ' +
+          r.failed +
+          ' | باقی‌مانده: ' +
+          remCount;
+        if (r.errors && r.errors.length) {
+          label += ' — ' + r.errors.join(' | ');
+        }
+        $('#mvn-q-label').text(label);
+
+        if (action === 'purge' && r.done > 0) {
+          $('#mvn-quarantine-table tbody tr').each(function () {
+            var qid = $(this).data('qid');
+            if (qid && ids.indexOf(qid) !== -1 && remaining.indexOf(qid) === -1) {
+              $(this).remove();
+            }
+          });
+        }
+
+        if (remCount > 0 && (r.done > 0 || r.failed === 0)) {
+          setTimeout(function () {
+            runQuarantineBatch(action, remaining, totalHint || ids.length);
+          }, 100);
+        } else {
+          $('#mvn-q-label').text(MVN.i18n.done + ' — صفحه در حال تازه‌سازی...');
+          setTimeout(function () {
+            window.location.reload();
+          }, 800);
+        }
+      })
+      .fail(function () {
+        $('#mvn-q-label').text('خطای ارتباط');
+        quarantineUpdateBulkUi();
+      });
+  }
+
+  $('#mvn-q-restore-selected').on('click', function () {
+    var ids = quarantineSelectedIds();
+    if (!ids.length) return;
+    if (!window.confirm('تعداد ' + ids.length + ' فایل به مسیر اصلی برگردانده شود؟')) return;
+    runQuarantineBatch('restore', ids, ids.length);
+  });
+
+  $('#mvn-q-purge-selected').on('click', function () {
+    var ids = quarantineSelectedIds();
+    if (!ids.length) return;
+    if (!window.confirm('تعداد ' + ids.length + ' آیتم برای همیشه از قرنطینه حذف شود؟')) return;
+    runQuarantineBatch('purge', ids, ids.length);
+  });
+
   $(document).on('click', '.mvn-q-restore', function () {
     if (!window.confirm('این فایل به مسیر اصلی برگردد؟')) return;
     var id = $(this).data('id');

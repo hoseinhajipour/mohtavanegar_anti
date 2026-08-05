@@ -46,6 +46,21 @@ if ( is_array( $issues ) ) {
 				<li><span>شروع</span><b><?php echo esc_html( isset( $last['started_at'] ) ? $last['started_at'] : '—' ); ?></b></li>
 				<li><span>پایان</span><b><?php echo esc_html( isset( $last['finished_at'] ) ? $last['finished_at'] : '—' ); ?></b></li>
 				<li><span>فایل‌های بررسی‌شده</span><b><?php echo isset( $last['total'] ) ? (int) $last['total'] : 0; ?></b></li>
+				<?php if ( ! empty( $last['catalog'] ) ) : ?>
+				<li><span>کل فایل‌های کاتالوگ</span><b><?php echo (int) $last['catalog']; ?></b></li>
+				<?php endif; ?>
+				<?php if ( ! empty( $last['skipped_unchanged'] ) ) : ?>
+				<li><span>ردشده (بدون تغییر)</span><b class="mvn-ok"><?php echo (int) $last['skipped_unchanged']; ?></b></li>
+				<?php endif; ?>
+				<?php if ( ! empty( $last['scan_core'] ) ) : ?>
+				<li><span>checksum هسته</span><b class="mvn-ok">فعال</b></li>
+				<?php endif; ?>
+				<?php if ( isset( $last['incremental'] ) ) : ?>
+				<li><span>نوع اسکن فایل</span><b><?php echo ! empty( $last['incremental'] ) ? 'افزایشی' : 'کامل'; ?></b></li>
+				<?php endif; ?>
+				<?php if ( ! empty( $last['scan_db'] ) ) : ?>
+				<li><span>اسکن DB</span><b class="mvn-ok">فعال<?php echo ! empty( $last['db_total'] ) ? ' (' . (int) $last['db_total'] . ' ردیف)' : ''; ?></b></li>
+				<?php endif; ?>
 				<li><span>مشکلات باز</span><b><?php echo (int) $issue_count; ?></b></li>
 			</ul>
 			<?php if ( $issue_count > 0 ) : ?>

@@ -19,6 +19,21 @@ function mvn_repo_plugins() {
 			'folder' => 'elementor',
 		),
 		array(
+			'slug'   => 'persian-elementor',
+			'name'   => 'المنتور فارسی',
+			'folder' => 'persian-elementor',
+		),
+		array(
+			'slug'   => 'woocommerce',
+			'name'   => 'WooCommerce',
+			'folder' => 'woocommerce',
+		),
+		array(
+			'slug'   => 'persian-woocommerce',
+			'name'   => 'ووکامرس فارسی',
+			'folder' => 'persian-woocommerce',
+		),
+		array(
 			'slug'   => 'classic-editor',
 			'name'   => 'ویرایشگر کلاسیک',
 			'folder' => 'classic-editor',

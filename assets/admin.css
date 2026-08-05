@@ -338,3 +338,68 @@
 .mvn-actions-cell {
   white-space: nowrap;
 }
+
+.mvn-conf-cell {
+  min-width: 88px;
+}
+
+.mvn-conf-bar-wrap {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.mvn-conf-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.mvn-conf-high {
+  background: linear-gradient(90deg, #dc2626, #ef4444);
+}
+
+.mvn-conf-mid {
+  background: linear-gradient(90deg, #d97706, #f59e0b);
+}
+
+.mvn-conf-low {
+  background: linear-gradient(90deg, #ca8a04, #eab308);
+}
+
+.mvn-conf-very-low {
+  background: linear-gradient(90deg, #64748b, #94a3b8);
+}
+
+.mvn-conf-num {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mvn-check-col {
+  width: 36px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.mvn-q-bulk-bar {
+  align-items: center;
+}
+
+.mvn-q-selected-count {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.mvn-check-col {
+  width: 36px;
+  text-align: center;
+}
+
+.mvn-check-col input {
+  margin: 0;
+}

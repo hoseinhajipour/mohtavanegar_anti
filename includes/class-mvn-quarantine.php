@@ -132,4 +132,69 @@ class MVN_Quarantine {
 		mvn_log( "Purged quarantine: {$id}" );
 		return true;
 	}
+
+	/**
+	 * Batch restore or purge quarantine entries.
+	 *
+	 * @param string[] $ids    Quarantine IDs.
+	 * @param string   $action restore|purge
+	 * @param int      $limit  Max items per call.
+	 * @return array {done, failed, errors, remaining, remaining_ids}
+	 */
+	public static function batch( $ids, $action, $limit = 15 ) {
+		if ( ! in_array( $action, array( 'restore', 'purge' ), true ) ) {
+			return array(
+				'done'           => 0,
+				'failed'         => 0,
+				'errors'         => array( 'عمل نامعتبر.' ),
+				'remaining'      => is_array( $ids ) ? count( $ids ) : 0,
+				'remaining_ids'  => is_array( $ids ) ? $ids : array(),
+			);
+		}
+
+		$clean = array();
+		foreach ( (array) $ids as $id ) {
+			$id = preg_replace( '/[^a-zA-Z0-9\-]/', '', sanitize_text_field( $id ) );
+			if ( $id ) {
+				$clean[] = $id;
+			}
+		}
+		$clean = array_values( array_unique( $clean ) );
+
+		$chunk      = array_slice( $clean, 0, $limit );
+		$rest       = array_slice( $clean, $limit );
+		$done       = 0;
+		$failed     = 0;
+		$errors     = array();
+		$failed_ids = array();
+
+		foreach ( $chunk as $id ) {
+			if ( 'restore' === $action ) {
+				$r = self::restore( $id );
+				if ( is_wp_error( $r ) ) {
+					$failed++;
+					$failed_ids[] = $id;
+					$errors[]     = $id . ': ' . $r->get_error_message();
+				} else {
+					$done++;
+				}
+			} elseif ( self::purge( $id ) ) {
+				$done++;
+			} else {
+				$failed++;
+				$failed_ids[] = $id;
+				$errors[]     = $id . ': حذف ناموفق';
+			}
+		}
+
+		$remaining_ids = array_merge( $failed_ids, $rest );
+
+		return array(
+			'done'          => $done,
+			'failed'        => $failed,
+			'errors'        => array_slice( $errors, 0, 10 ),
+			'remaining'     => count( $remaining_ids ),
+			'remaining_ids' => $remaining_ids,
+		);
+	}
 }

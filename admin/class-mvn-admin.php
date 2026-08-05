@@ -30,10 +30,13 @@ class MVN_Admin {
 			'mvn_fix_one',
 			'mvn_fix_batch',
 			'mvn_fix_clear',
+			'mvn_fix_ignore',
 			'mvn_htaccess_restore',
 			'mvn_htaccess_purge',
 			'mvn_core_start',
 			'mvn_core_tick',
+			'mvn_core_integrity_start',
+			'mvn_core_integrity_tick',
 			'mvn_plugin_start',
 			'mvn_plugin_tick',
 			'mvn_perms_start',
@@ -41,6 +44,7 @@ class MVN_Admin {
 			'mvn_hardening_save',
 			'mvn_quarantine_restore',
 			'mvn_quarantine_purge',
+			'mvn_quarantine_batch',
 		);
 		foreach ( $ajax as $action ) {
 			add_action( 'wp_ajax_' . $action, array( $this, 'ajax_' . substr( $action, 4 ) ) );
@@ -79,12 +83,15 @@ class MVN_Admin {
 				'ajax'  => admin_url( 'admin-ajax.php' ),
 				'nonce' => wp_create_nonce( MVN_NONCE_ACTION ),
 				'i18n'  => array(
-					'scanning'  => 'در حال اسکن...',
-					'done'      => 'تمام شد',
-					'error'     => 'خطا',
-					'confirm'   => 'آیا مطمئن هستید؟',
-					'fixing'   => 'در حال رفع...',
-					'repairing' => 'در حال تعمیر...',
+					'scanning'       => 'در حال اسکن...',
+					'done'           => 'تمام شد',
+					'error'          => 'خطا',
+					'confirm'        => 'آیا مطمئن هستید؟',
+					'confirm_ignore' => 'این مورد به عنوان امن علامت‌گذاری شود و در اسکن‌های بعدی نادیده گرفته شود؟',
+					'fixing'         => 'در حال رفع...',
+					'repairing'      => 'در حال تعمیر...',
+					'ignoring'       => 'در حال ثبت...',
+					'ignored'        => 'امن علامت‌گذاری شد.',
 				),
 			)
 		);
@@ -138,12 +145,14 @@ class MVN_Admin {
 		$this->render(
 			'repair',
 			array(
-				'core'    => MVN_Core_Repair::source_status(),
-				'ht'      => MVN_Htaccess_Guard::root_status(),
-				'cstate'  => MVN_Core_Repair::get_state(),
-				'pstate'  => MVN_Permissions::get_state(),
-				'plugins' => MVN_Plugin_Repair::catalog_status(),
-				'plstate' => MVN_Plugin_Repair::get_state(),
+				'core'       => MVN_Core_Repair::source_status(),
+				'ht'         => MVN_Htaccess_Guard::root_status(),
+				'cstate'     => MVN_Core_Repair::get_state(),
+				'istate'     => MVN_Core_Integrity::get_standalone_state(),
+				'integrity'  => MVN_Core_Integrity::last_summary(),
+				'pstate'     => MVN_Permissions::get_state(),
+				'plugins'    => MVN_Plugin_Repair::catalog_status(),
+				'plstate'    => MVN_Plugin_Repair::get_state(),
 			)
 		);
 	}
@@ -179,11 +188,24 @@ class MVN_Admin {
 		$this->guard();
 		$scope = isset( $_POST['scope'] ) ? sanitize_key( wp_unslash( $_POST['scope'] ) ) : 'all';
 		$deep  = ! empty( $_POST['deep'] );
+		$full  = ! empty( $_POST['full'] );
+		$scan_db = ! isset( $_POST['scan_db'] ) || ! empty( $_POST['scan_db'] );
+		$scan_core = ! isset( $_POST['scan_core'] ) || ! empty( $_POST['scan_core'] );
+		$incremental = ! $full && ( ! isset( $_POST['incremental'] ) || ! empty( $_POST['incremental'] ) );
 		if ( ! in_array( $scope, array( 'all', 'wp-content', 'core' ), true ) ) {
 			$scope = 'all';
 		}
 		@set_time_limit( 120 );
-		$state = MVN_Scanner::start( array( 'scope' => $scope, 'deep' => $deep ) );
+		$state = MVN_Scanner::start(
+			array(
+				'scope'       => $scope,
+				'deep'        => $deep,
+				'incremental' => $incremental,
+				'full'        => $full,
+				'scan_db'     => $scan_db,
+				'scan_core'   => $scan_core,
+			)
+		);
 		wp_send_json_success( $this->public_scan_state( $state ) );
 	}
 
@@ -204,13 +226,23 @@ class MVN_Admin {
 			return array( 'status' => 'idle' );
 		}
 		return array(
-			'status'      => isset( $state['status'] ) ? $state['status'] : 'idle',
-			'total'       => isset( $state['total'] ) ? (int) $state['total'] : 0,
-			'processed'   => isset( $state['processed'] ) ? (int) $state['processed'] : 0,
-			'stats'       => isset( $state['stats'] ) ? $state['stats'] : array(),
-			'issue_count' => isset( $state['issues'] ) ? count( $state['issues'] ) : 0,
-			'started_at'  => isset( $state['started_at'] ) ? $state['started_at'] : '',
-			'finished_at' => isset( $state['finished_at'] ) ? $state['finished_at'] : '',
+			'status'            => isset( $state['status'] ) ? $state['status'] : 'idle',
+			'total'             => isset( $state['total'] ) ? (int) $state['total'] : 0,
+			'processed'         => isset( $state['processed'] ) ? (int) $state['processed'] : 0,
+			'catalog'           => isset( $state['catalog'] ) ? (int) $state['catalog'] : ( isset( $state['total'] ) ? (int) $state['total'] : 0 ),
+			'skipped_unchanged' => isset( $state['skipped_unchanged'] ) ? (int) $state['skipped_unchanged'] : 0,
+			'incremental'       => ! empty( $state['incremental'] ),
+			'scan_db'           => ! empty( $state['scan_db'] ),
+			'scan_core'         => ! empty( $state['scan_core'] ),
+			'phase'             => isset( $state['phase'] ) ? $state['phase'] : 'files',
+			'core_source'       => isset( $state['core_source'] ) ? $state['core_source'] : '',
+			'core_version'      => isset( $state['core_version'] ) ? $state['core_version'] : '',
+			'db_phase'          => isset( $state['db_phase'] ) ? $state['db_phase'] : '',
+			'db_phase_label'    => ! empty( $state['db_phase'] ) ? MVN_DB_Scanner::sub_phase_label( $state['db_phase'] ) : '',
+			'stats'             => isset( $state['stats'] ) ? $state['stats'] : array(),
+			'issue_count'       => isset( $state['issues'] ) ? count( $state['issues'] ) : 0,
+			'started_at'        => isset( $state['started_at'] ) ? $state['started_at'] : '',
+			'finished_at'       => isset( $state['finished_at'] ) ? $state['finished_at'] : '',
 		);
 	}
 
@@ -230,7 +262,7 @@ class MVN_Admin {
 	public function ajax_fix_batch() {
 		$this->guard();
 		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
-		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine' );
+		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review' );
 		if ( ! in_array( $filter, $allowed, true ) ) {
 			$filter = '';
 		}
@@ -243,6 +275,25 @@ class MVN_Admin {
 		$this->guard();
 		MVN_Scanner::clear_issues();
 		wp_send_json_success( array( 'message' => 'لیست مشکلات پاک شد. یک اسکن جدید اجرا کنید.' ) );
+	}
+
+	public function ajax_fix_ignore() {
+		$this->guard();
+		$id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+		if ( ! $id ) {
+			wp_send_json_error( array( 'message' => 'شناسه خالی است.' ) );
+		}
+		$permanent = ! empty( $_POST['permanent'] );
+		$r         = MVN_Scanner::ignore_issue( $id, $permanent );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success(
+			array(
+				'message'   => 'به عنوان امن علامت‌گذاری شد.',
+				'remaining' => count( MVN_Scanner::get_issues() ),
+			)
+		);
 	}
 
 	public function ajax_htaccess_restore() {
@@ -289,6 +340,40 @@ class MVN_Admin {
 			'written'  => isset( $state['written'] ) ? (int) $state['written'] : 0,
 			'skipped'  => isset( $state['skipped'] ) ? (int) $state['skipped'] : 0,
 			'errors'   => isset( $state['errors'] ) ? array_slice( $state['errors'], -10 ) : array(),
+		);
+	}
+
+	public function ajax_core_integrity_start() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$state = MVN_Core_Integrity::standalone_start();
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_core_integrity_state( $state ) );
+	}
+
+	public function ajax_core_integrity_tick() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$state = MVN_Core_Integrity::standalone_tick();
+		wp_send_json_success( $this->public_core_integrity_state( $state ) );
+	}
+
+	private function public_core_integrity_state( $state ) {
+		if ( empty( $state ) ) {
+			return array( 'status' => 'idle' );
+		}
+		$issue_count = isset( $state['issues'] ) ? count( $state['issues'] ) : 0;
+		return array(
+			'status'       => isset( $state['status'] ) ? $state['status'] : 'idle',
+			'total'        => isset( $state['total'] ) ? (int) $state['total'] : 0,
+			'processed'    => isset( $state['processed'] ) ? (int) $state['processed'] : 0,
+			'core_sub'     => isset( $state['core_sub'] ) ? $state['core_sub'] : '',
+			'core_source'  => isset( $state['core_source'] ) ? $state['core_source'] : '',
+			'core_version' => isset( $state['core_version'] ) ? $state['core_version'] : '',
+			'issue_count'  => $issue_count,
+			'stats'        => isset( $state['stats'] ) ? $state['stats'] : array(),
 		);
 	}
 
@@ -387,5 +472,33 @@ class MVN_Admin {
 			wp_send_json_error( array( 'message' => 'حذف ناموفق بود.' ) );
 		}
 		wp_send_json_success( array( 'message' => 'حذف شد.' ) );
+	}
+
+	public function ajax_quarantine_batch() {
+		$this->guard();
+		$action = isset( $_POST['batch_action'] ) ? sanitize_key( wp_unslash( $_POST['batch_action'] ) ) : '';
+		if ( ! in_array( $action, array( 'restore', 'purge' ), true ) ) {
+			wp_send_json_error( array( 'message' => 'عملیات نامعتبر.' ) );
+		}
+		$ids = isset( $_POST['ids'] ) ? wp_unslash( $_POST['ids'] ) : array(); // phpcs:ignore
+		if ( ! is_array( $ids ) ) {
+			$ids = array( $ids );
+		}
+		$ids = array_values(
+			array_filter(
+				array_map(
+					function ( $id ) {
+						return sanitize_text_field( (string) $id );
+					},
+					$ids
+				)
+			)
+		);
+		if ( empty( $ids ) ) {
+			wp_send_json_error( array( 'message' => 'هیچ آیتمی انتخاب نشده.' ) );
+		}
+		@set_time_limit( 120 );
+		$result = MVN_Quarantine::batch( $ids, $action, 15 );
+		wp_send_json_success( $result );
 	}
 }
