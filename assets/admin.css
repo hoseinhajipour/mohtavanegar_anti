@@ -1,0 +1,340 @@
+/* Mohtavanegar Antivirus — admin UI (RTL) */
+
+.mvn-wrap {
+  max-width: 1180px;
+  margin: 20px 20px 40px 0;
+  font-family: Tahoma, "Segoe UI", sans-serif;
+}
+
+.mvn-header {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0ea5e9 160%);
+  color: #fff;
+  border-radius: 14px;
+  padding: 18px 20px 0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+  margin-bottom: 18px;
+}
+
+.mvn-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 14px;
+}
+
+.mvn-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(14, 165, 233, 0.2);
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px !important;
+  width: 48px !important;
+  height: 48px !important;
+  color: #7dd3fc;
+}
+
+.mvn-brand h1 {
+  margin: 0;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.mvn-sub {
+  margin: 4px 0 0;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.mvn-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8px;
+}
+
+.mvn-tab {
+  color: rgba(255, 255, 255, 0.7) !important;
+  text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 10px 10px 0 0;
+  font-size: 13px;
+  transition: 0.15s ease;
+}
+
+.mvn-tab:hover {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mvn-tab.is-active {
+  color: #0f172a !important;
+  background: #f1f5f9;
+  font-weight: 700;
+}
+
+.mvn-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.mvn-card h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: #0f172a;
+}
+
+.mvn-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.mvn-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mvn-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 960px) {
+  .mvn-grid-2,
+  .mvn-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mvn-stat {
+  text-align: center;
+  padding: 22px 12px;
+}
+
+.mvn-stat-num {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+.mvn-stat-label {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.mvn-stat.is-danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+.mvn-stat.is-danger .mvn-stat-num {
+  color: #dc2626;
+}
+
+.mvn-stat.is-warn {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+.mvn-stat.is-warn .mvn-stat-num {
+  color: #d97706;
+}
+
+.mvn-stat.is-ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.mvn-stat.is-ok .mvn-stat-num {
+  color: #16a34a;
+}
+
+.mvn-kv {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.mvn-kv li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #e2e8f0;
+  font-size: 13px;
+}
+
+.mvn-kv li span {
+  color: #64748b;
+}
+
+.mvn-ok {
+  color: #16a34a;
+}
+.mvn-bad {
+  color: #dc2626;
+}
+
+.mvn-muted {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.mvn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mvn-form-row {
+  margin: 12px 0;
+}
+
+.mvn-form-row label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.mvn-form-row select {
+  min-width: 280px;
+}
+
+.mvn-progress-wrap {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.mvn-progress {
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mvn-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #0ea5e9, #22c55e);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.mvn-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.mvn-stats-inline {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.mvn-table td,
+.mvn-table th {
+  vertical-align: top;
+  font-size: 12px;
+}
+
+.mvn-path code {
+  word-break: break-all;
+  direction: ltr;
+  display: inline-block;
+  text-align: left;
+}
+
+.mvn-snippet {
+  max-width: 280px;
+  max-height: 70px;
+  overflow: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  direction: ltr;
+  text-align: left;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.mvn-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mvn-badge-critical {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.mvn-badge-warning {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.mvn-badge-info {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.mvn-empty {
+  padding: 28px;
+  text-align: center;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px dashed #cbd5e1;
+}
+
+.mvn-inline-fields {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.mvn-inline-fields label {
+  font-weight: 500;
+}
+
+.mvn-form-table th {
+  width: 220px;
+  padding-right: 0;
+}
+
+.mvn-notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.mvn-notice-ok {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.mvn-notice-err {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.mvn-actions-cell {
+  white-space: nowrap;
+}
