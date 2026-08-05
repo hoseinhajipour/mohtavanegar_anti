@@ -3,7 +3,7 @@
  * Plugin Name:       Mohtavanegar Antivirus
  * Plugin URI:        https://mohtavanegar.local/
  * Description:       آنتی‌ویروس وردپرس: اسکن بدافزار، حذف کدهای تزریق‌شده، تعمیر فایل‌های هسته از سورس سالم، بازیابی htaccess، حذف htaccess های جعلی، سخت‌سازی امنیتی (Brute Force، XMLRPC، سطح دسترسی‌ها).
- * Version:           1.4.0
+ * Version:           1.5.6
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            Mohtavanegar Security
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MVN_VERSION', '1.4.0' );
+define( 'MVN_VERSION', '1.5.6' );
 define( 'MVN_PLUGIN_FILE', __FILE__ );
 define( 'MVN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MVN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -43,6 +43,7 @@ require_once MVN_PLUGIN_DIR . 'includes/repo-plugins.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-plugin-repair.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-permissions.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-hardening.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-perf.php';
 
 register_activation_hook( __FILE__, 'mvn_activate' );
 register_deactivation_hook( __FILE__, 'mvn_deactivate' );
@@ -56,9 +57,11 @@ function mvn_activate() {
 
 function mvn_deactivate() {
 	// Quarantine folder and scan history are intentionally preserved.
+	MVN_Perf::disarm();
 }
 
 MVN_Hardening::instance()->boot();
+MVN_Perf::instance()->boot();
 
 if ( is_admin() ) {
 	require_once MVN_PLUGIN_DIR . 'admin/class-mvn-admin.php';

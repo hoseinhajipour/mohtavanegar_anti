@@ -14,8 +14,70 @@ if ( is_array( $issues ) ) {
 		}
 	}
 }
+$checklist = isset( $checklist ) && is_array( $checklist ) ? $checklist : array( 'items' => array(), 'done' => 0, 'total' => 0, 'pct' => 0 );
+$cl_pct    = (int) $checklist['pct'];
+$cl_done   = (int) $checklist['done'];
+$cl_total  = (int) $checklist['total'];
+$cl_pending = max( 0, $cl_total - $cl_done );
+$ring_r    = 54;
+$ring_c    = 2 * M_PI * $ring_r;
+$ring_off  = $ring_c * ( 1 - ( $cl_pct / 100 ) );
 ?>
-<div class="mvn-grid mvn-grid-4">
+<div class="mvn-card mvn-checklist-hero">
+	<div class="mvn-checklist-hero-inner">
+		<div class="mvn-checklist-ring-wrap" aria-hidden="true">
+			<svg class="mvn-checklist-ring" viewBox="0 0 120 120" width="120" height="120">
+				<circle class="mvn-ring-bg" cx="60" cy="60" r="<?php echo (float) $ring_r; ?>"></circle>
+				<circle
+					class="mvn-ring-fg <?php echo $cl_pct >= 100 ? 'is-complete' : ( $cl_pct < 50 ? 'is-low' : 'is-mid' ); ?>"
+					cx="60" cy="60" r="<?php echo (float) $ring_r; ?>"
+					stroke-dasharray="<?php echo esc_attr( (string) round( $ring_c, 2 ) ); ?>"
+					stroke-dashoffset="<?php echo esc_attr( (string) round( $ring_off, 2 ) ); ?>"
+				></circle>
+			</svg>
+			<div class="mvn-checklist-ring-label">
+				<strong><?php echo (int) $cl_pct; ?>%</strong>
+				<span>ایمن‌سازی</span>
+			</div>
+		</div>
+		<div class="mvn-checklist-hero-text">
+			<h2>چک‌لیست کارهای امنیتی</h2>
+			<p>
+				<strong class="mvn-ok"><?php echo (int) $cl_done; ?></strong> انجام‌شده
+				·
+				<strong class="<?php echo $cl_pending > 0 ? 'mvn-bad' : 'mvn-ok'; ?>"><?php echo (int) $cl_pending; ?></strong> باقی‌مانده
+				از <?php echo (int) $cl_total; ?> مورد
+			</p>
+			<p class="mvn-muted">موارد قرمز هنوز انجام نشده‌اند؛ با لینک هر مورد به صفحه مربوطه بروید.</p>
+		</div>
+	</div>
+
+	<div class="mvn-checklist-bar">
+		<div class="mvn-checklist-bar-fill <?php echo $cl_pct >= 100 ? 'is-complete' : ( $cl_pct < 50 ? 'is-low' : 'is-mid' ); ?>" style="width:<?php echo (int) $cl_pct; ?>%"></div>
+	</div>
+
+	<ul class="mvn-checklist">
+		<?php foreach ( $checklist['items'] as $item ) : ?>
+			<?php
+			$done = ! empty( $item['done'] );
+			?>
+			<li class="mvn-checklist-item <?php echo $done ? 'is-done' : 'is-pending'; ?>">
+				<span class="mvn-checklist-icon" aria-hidden="true"><?php echo $done ? '✓' : '!'; ?></span>
+				<div class="mvn-checklist-body">
+					<div class="mvn-checklist-title"><?php echo esc_html( isset( $item['title'] ) ? $item['title'] : '' ); ?></div>
+					<div class="mvn-checklist-desc"><?php echo esc_html( isset( $item['desc'] ) ? $item['desc'] : '' ); ?></div>
+				</div>
+				<?php if ( ! empty( $item['url'] ) ) : ?>
+					<a class="button <?php echo $done ? '' : 'button-primary'; ?> mvn-checklist-btn" href="<?php echo esc_url( $item['url'] ); ?>">
+						<?php echo esc_html( $done ? 'مشاهده' : ( isset( $item['action'] ) ? $item['action'] : 'انجام' ) ); ?>
+					</a>
+				<?php endif; ?>
+			</li>
+		<?php endforeach; ?>
+	</ul>
+</div>
+
+<div class="mvn-grid mvn-grid-4" style="margin-top:16px">
 	<div class="mvn-card mvn-stat <?php echo $crit > 0 ? 'is-danger' : 'is-ok'; ?>">
 		<div class="mvn-stat-num"><?php echo (int) $crit; ?></div>
 		<div class="mvn-stat-label">تهدید بحرانی</div>

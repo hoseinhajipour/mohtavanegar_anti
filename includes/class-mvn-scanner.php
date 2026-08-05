@@ -600,19 +600,19 @@ class MVN_Scanner {
 	 * Drop known false positives for DB content.
 	 */
 	public static function is_db_false_positive( $sig_id, $table, $row, $column, $content, $offset, $match ) {
-		if ( 'options' === $table && 'option_value' === $column ) {
+		if ( 'options' === $table ) {
 			$name = isset( $row['option_name'] ) ? $row['option_name'] : '';
-			if ( in_array( $name, mvn_db_protected_options(), true ) && in_array( $sig_id, array( 'long_base64_blob', 'chr_chain', 'create_function' ), true ) ) {
+			if ( $name && mvn_db_is_benign_option( $name ) ) {
 				return true;
 			}
-		}
-		if ( 'postmeta' === $table && isset( $row['meta_key'] ) ) {
-			$key = $row['meta_key'];
-			if ( 0 === strpos( $key, '_elementor' ) || 0 === strpos( $key, '_wp_' ) ) {
-				if ( in_array( $sig_id, array( 'long_base64_blob', 'chr_chain' ), true ) ) {
+			if ( 'option_value' === $column && function_exists( 'is_serialized' ) && is_serialized( $content ) ) {
+				if ( ! in_array( $sig_id, array( 'eval_decoder', 'eval_request', 'shell_exec_request', 'webshell_markers', 'nested_decoders', 'preg_replace_e' ), true ) ) {
 					return true;
 				}
 			}
+		}
+		if ( 'postmeta' === $table && isset( $row['meta_key'] ) && mvn_db_is_benign_meta_key( $row['meta_key'] ) ) {
+			return true;
 		}
 		return (bool) apply_filters( 'mvn_db_scan_false_positive', false, $sig_id, $table, $row, $column, $content, $offset, $match );
 	}

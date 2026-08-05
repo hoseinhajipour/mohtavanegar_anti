@@ -23,6 +23,7 @@ class MVN_Admin {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
 		add_action( 'admin_init', array( $this, 'maybe_export_issues_csv' ) );
+		add_action( 'admin_init', array( $this, 'maybe_export_perf_csv' ) );
 
 		$ajax = array(
 			'mvn_scan_start',
@@ -49,6 +50,10 @@ class MVN_Admin {
 			'mvn_quarantine_restore',
 			'mvn_quarantine_purge',
 			'mvn_quarantine_batch',
+			'mvn_perf_arm',
+			'mvn_perf_disarm',
+			'mvn_perf_optimize',
+			'mvn_perf_clear',
 		);
 		foreach ( $ajax as $action ) {
 			add_action( 'wp_ajax_' . $action, array( $this, 'ajax_' . substr( $action, 4 ) ) );
@@ -72,6 +77,7 @@ class MVN_Admin {
 		add_submenu_page( 'mvn-antivirus', 'تعمیر هسته (Repair)', 'تعمیر هسته', $cap, 'mvn-repair', array( $this, 'page_repair' ) );
 		add_submenu_page( 'mvn-antivirus', 'سخت‌سازی', 'سخت‌سازی', $cap, 'mvn-hardening', array( $this, 'page_hardening' ) );
 		add_submenu_page( 'mvn-antivirus', 'قرنطینه', 'قرنطینه', $cap, 'mvn-quarantine', array( $this, 'page_quarantine' ) );
+		add_submenu_page( 'mvn-antivirus', 'سرعت لود', 'سرعت لود', $cap, 'mvn-perf', array( $this, 'page_perf' ) );
 	}
 
 	public function assets( $hook ) {
@@ -117,15 +123,31 @@ class MVN_Admin {
 	}
 
 	public function page_dashboard() {
+		$last   = get_option( MVN_OPTION_LASTSCAN, array() );
+		$issues = MVN_Scanner::get_issues();
+		$ht     = MVN_Htaccess_Guard::root_status();
+		$core   = MVN_Core_Repair::source_status();
+		$hard   = MVN_Hardening::instance()->settings();
 		$this->render(
 			'dashboard',
 			array(
-				'last'     => get_option( MVN_OPTION_LASTSCAN, array() ),
-				'issues'   => MVN_Scanner::get_issues(),
-				'ht'       => MVN_Htaccess_Guard::root_status(),
-				'core'     => MVN_Core_Repair::source_status(),
-				'hard'     => MVN_Hardening::instance()->settings(),
-				'q_count'  => count( MVN_Quarantine::list_all() ),
+				'last'      => $last,
+				'issues'    => $issues,
+				'ht'        => $ht,
+				'core'      => $core,
+				'hard'      => $hard,
+				'q_count'   => count( MVN_Quarantine::list_all() ),
+				'checklist' => mvn_security_checklist(
+					array(
+						'last'      => $last,
+						'issues'    => $issues,
+						'ht'        => $ht,
+						'core'      => $core,
+						'hard'      => $hard,
+						'integrity' => MVN_Core_Integrity::last_summary(),
+						'perms'     => MVN_Permissions::get_state(),
+					)
+				),
 			)
 		);
 	}
@@ -182,6 +204,33 @@ class MVN_Admin {
 		exit;
 	}
 
+	/**
+	 * Download last perf report as CSV.
+	 */
+	public function maybe_export_perf_csv() {
+		if ( ! isset( $_GET['page'] ) || 'mvn-perf' !== sanitize_key( wp_unslash( $_GET['page'] ) ) ) {
+			return;
+		}
+		if ( empty( $_GET['mvn_export'] ) || 'csv' !== sanitize_key( wp_unslash( $_GET['mvn_export'] ) ) ) {
+			return;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'دسترسی ندارید.', 'mvn' ), 403 );
+		}
+		check_admin_referer( 'mvn_export_perf_csv', 'nonce' );
+
+		$csv      = MVN_Perf::report_to_csv();
+		$filename = 'mvn-perf-' . gmdate( 'Y-m-d-His' ) . '.csv';
+
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+		header( 'Content-Length: ' . strlen( $csv ) );
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo $csv;
+		exit;
+	}
+
 	public function page_repair() {
 		$this->render(
 			'repair',
@@ -212,6 +261,22 @@ class MVN_Admin {
 			'quarantine',
 			array(
 				'items' => MVN_Quarantine::list_all(),
+			)
+		);
+	}
+
+	public function page_perf() {
+		$this->render(
+			'perf',
+			array(
+				'arm'        => MVN_Perf::arm_status(),
+				'report'     => MVN_Perf::last_report(),
+				'blocked'    => MVN_Perf::blocked_hosts(),
+				'export_url' => wp_nonce_url(
+					admin_url( 'admin.php?page=mvn-perf&mvn_export=csv' ),
+					'mvn_export_perf_csv',
+					'nonce'
+				),
 			)
 		);
 	}
@@ -568,5 +633,40 @@ class MVN_Admin {
 		@set_time_limit( 120 );
 		$result = MVN_Quarantine::batch( $ids, $action, 15 );
 		wp_send_json_success( $result );
+	}
+
+	public function ajax_perf_arm() {
+		$this->guard();
+		MVN_Perf::arm( 10, 5 );
+		wp_send_json_success(
+			array(
+				'message' => 'رهگیری فعال شد. صفحه اصلی سایت را باز کنید، سپس این صفحه را تازه کنید.',
+				'arm'     => MVN_Perf::arm_status(),
+			)
+		);
+	}
+
+	public function ajax_perf_disarm() {
+		$this->guard();
+		MVN_Perf::disarm();
+		wp_send_json_success(
+			array(
+				'message' => 'رهگیری متوقف شد.',
+				'arm'     => MVN_Perf::arm_status(),
+			)
+		);
+	}
+
+	public function ajax_perf_optimize() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$result = MVN_Perf::optimize();
+		wp_send_json_success( $result );
+	}
+
+	public function ajax_perf_clear() {
+		$this->guard();
+		MVN_Perf::clear_report();
+		wp_send_json_success( array( 'message' => 'گزارش پاک شد.' ) );
 	}
 }

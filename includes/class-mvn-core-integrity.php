@@ -197,7 +197,7 @@ class MVN_Core_Integrity {
 	}
 
 	private static function fetch_api_checksums( $version, $locale ) {
-		$transient_key = 'mvn_cksum_' . md5( $version . '|' . $locale );
+		$transient_key = 'mvn_cksum_v2_' . md5( $version . '|' . $locale );
 		$cached        = get_transient( $transient_key );
 		if ( is_array( $cached ) && ! empty( $cached['files'] ) ) {
 			return $cached;
@@ -234,9 +234,43 @@ class MVN_Core_Integrity {
 			'source'  => 'api',
 			'version' => $version,
 			'locale'  => $locale,
-			'files'   => $data['checksums'],
+			'files'   => self::filter_core_only_checksums( $data['checksums'] ),
 		);
+		if ( empty( $out['files'] ) ) {
+			return new WP_Error( 'checksum_empty', 'بعد از فیلتر هسته، هیچ checksum معتبری باقی نماند.' );
+		}
 		set_transient( $transient_key, $out, DAY_IN_SECONDS );
+		return $out;
+	}
+
+	/**
+	 * Keep only real WordPress core paths (exclude bundled themes/plugins from API list).
+	 *
+	 * wordpress.org checksums include default themes (twentytwenty*) and akismet —
+	 * those are optional and must not be reported as "missing core files".
+	 *
+	 * @param array $files path => md5
+	 * @return array
+	 */
+	private static function filter_core_only_checksums( $files ) {
+		$out = array();
+		if ( ! is_array( $files ) ) {
+			return $out;
+		}
+		foreach ( $files as $rel => $hash ) {
+			$rel = ltrim( str_replace( '\\', '/', (string) $rel ), '/' );
+			if ( ! $rel || ! is_string( $hash ) || '' === $hash ) {
+				continue;
+			}
+			// Never treat wp-content as core integrity scope.
+			if ( 0 === strpos( $rel, 'wp-content/' ) ) {
+				continue;
+			}
+			if ( ! mvn_is_core_path( $rel ) ) {
+				continue;
+			}
+			$out[ $rel ] = $hash;
+		}
 		return $out;
 	}
 

@@ -81,6 +81,29 @@ $s = $settings;
 					ارسال X-Content-Type-Options، X-Frame-Options، Referrer-Policy</label>
 				</td>
 			</tr>
+			<tr>
+				<th>عدم درج نظرات</th>
+				<td>
+					<label><input type="checkbox" name="settings[disable_comments]" value="1" <?php checked( ! empty( $s['disable_comments'] ) ); ?>>
+					غیرفعال‌سازی نظرات و trackback در کل سایت (فرم، REST، پیشخوان و <code>wp-comments-post.php</code>)</label>
+				</td>
+			</tr>
+			<tr>
+				<th>مسدودسازی HTTP خارجی</th>
+				<td>
+					<label><input type="checkbox" name="settings[block_external_http]" value="1" <?php checked( ! empty( $s['block_external_http'] ) ); ?>>
+					<code>WP_HTTP_BLOCK_EXTERNAL</code> — قطع درخواست‌های HTTP به دامنه‌های خارجی</label>
+					<p class="description" style="margin-top:6px">سخت‌گیرانه است: آپدیت هسته/افزونه، API وردپرس.ارگ و سرویس‌های خارجی قطع می‌شوند. در صورت نیاز می‌توانید در <code>wp-config.php</code> با <code>WP_ACCESSIBLE_HOSTS</code> استثنا تعریف کنید.</p>
+				</td>
+			</tr>
+			<tr>
+				<th>عدم ثبت‌نام مدیر / نویسنده</th>
+				<td>
+					<label><input type="checkbox" name="settings[block_privileged_signup]" value="1" <?php checked( ! empty( $s['block_privileged_signup'] ) ); ?>>
+					جلوگیری از ایجاد کاربر جدید با نقش <strong>مدیر</strong> یا <strong>نویسنده</strong></label>
+					<p class="description" style="margin-top:6px">ثبت‌نام عمومی، «افزودن کاربر» در پیشخوان و REST را پوشش می‌دهد. کاربران فعلی دست‌نخورده می‌مانند؛ فقط کاربر تازه‌ساخته‌شده نمی‌تواند این نقش‌ها را بگیرد.</p>
+				</td>
+			</tr>
 		</table>
 
 		<p>

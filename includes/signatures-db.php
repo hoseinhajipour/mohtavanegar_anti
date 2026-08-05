@@ -112,6 +112,108 @@ function mvn_db_sub_phases() {
 	return array( 'options', 'posts', 'postmeta', 'users', 'usermeta' );
 }
 
+/**
+ * Known-benign option names / prefixes (plugin settings, caches, Freemius, etc.).
+ * These must not be signature-scanned — clean rules cannot safely rewrite them.
+ */
+function mvn_db_benign_option_patterns() {
+	return apply_filters(
+		'mvn_db_benign_option_patterns',
+		array(
+			'/^_transient_/',
+			'/^_site_transient_/',
+			'/^revslider/i',
+			'/^rs[_-]/i',
+			'/^fs_/i',
+			'/^woocommerce_/i',
+			'/^wc_/i',
+			'/^woodmart/i',
+			'/^elementor_/i',
+			'/^_elementor_/i',
+			'/^wpr_/i',
+			'/^wp_rocket/i',
+			'/^litespeed_/i',
+			'/^external_updates-/i',
+			'/^rtl_/i',
+			'/^acf_/i',
+			'/^rank_math/i',
+			'/^yoast/i',
+			'/^wpseo/i',
+			'/^wordfence/i',
+			'/^wf/i',
+			'/^updraft/i',
+			'/^jetpack_/i',
+			'/^gravityforms/i',
+			'/^gf_/i',
+			'/^redux_/i',
+			'/^kirki_/i',
+			'/^widget_/i',
+			'/^theme_mods_/i',
+			'/^sidebars_widgets$/i',
+			'/^cron$/i',
+			'/^rewrite_rules$/i',
+			'/^can_compress_scripts$/i',
+			'/^recently_edited$/i',
+			'/^auto_updater/i',
+			'/^_site_transient_update_/i',
+			'/^_transient_plugin_/i',
+			'/^_transient_timeout_/i',
+			'/^_site_transient_timeout_/i',
+		)
+	);
+}
+
+/**
+ * @param string $name Option name.
+ * @return bool
+ */
+function mvn_db_is_benign_option( $name ) {
+	$name = (string) $name;
+	if ( '' === $name ) {
+		return false;
+	}
+	if ( in_array( $name, mvn_db_protected_options(), true ) ) {
+		return true;
+	}
+	foreach ( mvn_db_benign_option_patterns() as $pattern ) {
+		if ( @preg_match( $pattern, $name ) ) {
+			return true;
+		}
+	}
+	return (bool) apply_filters( 'mvn_db_is_benign_option', false, $name );
+}
+
+/**
+ * Meta keys that are almost always plugin config (high FP rate for file signatures).
+ */
+function mvn_db_is_benign_meta_key( $key ) {
+	$key = (string) $key;
+	if ( '' === $key ) {
+		return false;
+	}
+	$patterns = apply_filters(
+		'mvn_db_benign_meta_key_patterns',
+		array(
+			'/^_elementor/',
+			'/^_wp_/',
+			'/^_woocommerce/',
+			'/^_wc_/',
+			'/^_oembed/',
+			'/^_menu_item/',
+			'/^field_/',
+			'/^_field_/',
+			'/^rank_math/',
+			'/^_yoast/',
+		)
+	);
+	foreach ( $patterns as $pattern ) {
+		if ( @preg_match( $pattern, $key ) ) {
+			return true;
+		}
+	}
+	return (bool) apply_filters( 'mvn_db_is_benign_meta_key', false, $key );
+}
+
 function mvn_db_heuristic_rogue_option_name( $table, $row, $column, $content ) {
 	if ( 'options' !== $table || 'option_name' !== $column ) {
 		return false;
@@ -184,7 +286,8 @@ function mvn_db_heuristic_admin_capability( $table, $row, $column, $content ) {
 }
 
 function mvn_db_heuristic_spam_injection( $table, $row, $column, $content ) {
-	if ( ! in_array( $column, array( 'post_content', 'post_title', 'post_excerpt', 'option_value', 'meta_value' ), true ) ) {
+	// Spam heuristics target post content, not plugin option blobs.
+	if ( ! in_array( $column, array( 'post_content', 'post_title', 'post_excerpt' ), true ) ) {
 		return false;
 	}
 	if ( strlen( $content ) < 20 ) {
@@ -209,10 +312,20 @@ function mvn_db_heuristic_serialized_shell( $table, $row, $column, $content ) {
 	if ( ! is_serialized( $content ) ) {
 		return false;
 	}
-	if ( preg_match( '/O:\d+:"(?:stdClass|Exception|ReflectionClass|SplFileObject)"/i', $content ) ) {
+
+	// WordPress update / cache transients routinely store stdClass — not malware.
+	if ( 'options' === $table && ! empty( $row['option_name'] ) ) {
+		$name = (string) $row['option_name'];
+		if ( 0 === strpos( $name, '_transient_' ) || 0 === strpos( $name, '_site_transient_' ) ) {
+			return false;
+		}
+	}
+
+	// stdClass alone is benign; dangerous gadget classes are the real risk.
+	if ( preg_match( '/O:\d+:"(?:Exception|ReflectionClass|ReflectionFunction|SplFileObject|PDO|Phar)"/i', $content ) ) {
 		return 'شیء PHP سریالایز با کلاس خطرناک';
 	}
-	if ( preg_match( '/(?:eval|base64_decode|gzinflate|shell_exec|system\s*\()/i', $content ) ) {
+	if ( preg_match( '/(?:eval\s*\(|assert\s*\(|base64_decode\s*\(|gzinflate\s*\(|shell_exec\s*\(|system\s*\()/i', $content ) ) {
 		return 'کد اجرایی داخل داده سریالایز';
 	}
 	return false;

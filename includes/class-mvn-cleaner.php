@@ -269,8 +269,6 @@ class MVN_Cleaner {
 	}
 
 	private static function db_clean( $issue ) {
-		global $wpdb;
-
 		$table  = isset( $issue['table'] ) ? $issue['table'] : '';
 		$row_id = isset( $issue['row_id'] ) ? (int) $issue['row_id'] : 0;
 		$column = isset( $issue['column'] ) ? $issue['column'] : '';
@@ -284,16 +282,41 @@ class MVN_Cleaner {
 			return $fetch;
 		}
 
-		$row     = $fetch['row'];
+		$row      = $fetch['row'];
 		$original = isset( $row[ $column ] ) ? (string) $row[ $column ] : '';
 		if ( '' === $original ) {
 			return new WP_Error( 'db_empty', 'مقدار ستون خالی است.' );
+		}
+
+		// Dismiss known false positives instead of failing forever.
+		if ( self::db_finding_is_false_positive( $issue, $row, $original ) ) {
+			mvn_log( 'DB finding dismissed as false positive: ' . ( isset( $issue['rel'] ) ? $issue['rel'] : '' ) );
+			return true;
+		}
+
+		// Auto-clean only makes sense for HTML/JS injection in post content.
+		if ( ! in_array( $column, array( 'post_content', 'post_excerpt', 'post_title' ), true ) ) {
+			return new WP_Error( 'db_review', 'این مورد option/meta قابل پاکسازی خودکار نیست — «امن است» بزنید یا دستی بررسی کنید.' );
 		}
 
 		$cleaned = $original;
 		$rules   = mvn_clean_rules();
 		$hits    = 0;
 		foreach ( $rules as $pattern => $replacement ) {
+			$new = @preg_replace( $pattern, $replacement, $cleaned, -1, $count );
+			if ( null !== $new && is_string( $new ) && $count > 0 ) {
+				$cleaned = $new;
+				$hits   += $count;
+			}
+		}
+
+		// Strip common spam iframes / remote scripts from post content.
+		$extra = array(
+			'/<iframe[^>]+style\s*=\s*["\'][^"\']*display\s*:\s*none[^"\']*["\'][^>]*>.*?<\/iframe>/is' => '',
+			'/<iframe[^>]+width\s*=\s*["\']?0["\']?[^>]*>.*?<\/iframe>/is' => '',
+			'/<script[^>]+src\s*=\s*["\']https?:\/\/(?!(?:www\.)?(?:youtube|youtu\.be|vimeo|google))[^"\']+["\'][^>]*>\s*<\/script>/is' => '',
+		);
+		foreach ( $extra as $pattern => $replacement ) {
 			$new = @preg_replace( $pattern, $replacement, $cleaned, -1, $count );
 			if ( null !== $new && is_string( $new ) && $count > 0 ) {
 				$cleaned = $new;
@@ -331,6 +354,27 @@ class MVN_Cleaner {
 
 		mvn_log( "DB cleaned: {$table}#{$row_id}.{$column} (hits={$hits})" );
 		return true;
+	}
+
+	/**
+	 * Detect FP findings that should be dismissed (not failed) during db_clean.
+	 */
+	private static function db_finding_is_false_positive( $issue, $row, $content ) {
+		$table = isset( $issue['table'] ) ? $issue['table'] : '';
+		if ( 'options' === $table ) {
+			$name = isset( $row['option_name'] ) ? $row['option_name'] : '';
+			if ( $name && mvn_db_is_benign_option( $name ) ) {
+				return true;
+			}
+			// Opaque serialized plugin data without PHP open tag — not injectable malware.
+			if ( function_exists( 'is_serialized' ) && is_serialized( $content ) && false === strpos( $content, '<?php' ) && false === stripos( $content, 'eval(' ) ) {
+				return true;
+			}
+		}
+		if ( 'postmeta' === $table && ! empty( $row['meta_key'] ) && mvn_db_is_benign_meta_key( $row['meta_key'] ) ) {
+			return true;
+		}
+		return false;
 	}
 
 	private static function db_delete_option( $issue ) {

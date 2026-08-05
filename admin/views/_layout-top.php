@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			<span class="mvn-logo dashicons dashicons-shield"></span>
 			<div>
 				<h1>آنتی‌ویروس محتوانگار</h1>
-				<p class="mvn-sub">اسکن · رفع · تعمیر هسته · سخت‌سازی امنیتی</p>
+				<p class="mvn-sub">اسکن · رفع · تعمیر هسته · سخت‌سازی · سرعت لود</p>
 			</div>
 		</div>
 		<nav class="mvn-tabs">
@@ -21,6 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				'mvn-repair'     => 'تعمیر هسته',
 				'mvn-hardening'  => 'سخت‌سازی',
 				'mvn-quarantine' => 'قرنطینه',
+				'mvn-perf'       => 'سرعت لود',
 			);
 			$current = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : 'mvn-antivirus'; // phpcs:ignore
 			foreach ( $tabs as $slug => $label ) :

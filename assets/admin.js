@@ -914,4 +914,97 @@
       }
     });
   });
+
+  /* ---- Perf / speed ---- */
+  function perfNotice(msg, ok) {
+    notice($('#mvn-perf-notice'), msg, ok !== false);
+  }
+
+  $('#mvn-perf-arm').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_perf_arm', {}).done(function (res) {
+      if (res && res.success) {
+        perfNotice(res.data.message, true);
+        setTimeout(function () {
+          window.location.reload();
+        }, 600);
+      } else {
+        $btn.prop('disabled', false);
+        perfNotice((res && res.data && res.data.message) || MVN.i18n.error, false);
+      }
+    }).fail(function () {
+      $btn.prop('disabled', false);
+      perfNotice('خطای ارتباط', false);
+    });
+  });
+
+  $('#mvn-perf-disarm').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_perf_disarm', {}).done(function (res) {
+      if (res && res.success) {
+        perfNotice(res.data.message, true);
+        setTimeout(function () {
+          window.location.reload();
+        }, 400);
+      } else {
+        $btn.prop('disabled', false);
+        perfNotice((res && res.data && res.data.message) || MVN.i18n.error, false);
+      }
+    }).fail(function () {
+      $btn.prop('disabled', false);
+      perfNotice('خطای ارتباط', false);
+    });
+  });
+
+  $('#mvn-perf-refresh').on('click', function () {
+    window.location.reload();
+  });
+
+  $('#mvn-perf-clear').on('click', function () {
+    if (!window.confirm(MVN.i18n.confirm)) return;
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_perf_clear', {}).done(function (res) {
+      if (res && res.success) {
+        window.location.reload();
+      } else {
+        $btn.prop('disabled', false);
+        perfNotice((res && res.data && res.data.message) || MVN.i18n.error, false);
+      }
+    }).fail(function () {
+      $btn.prop('disabled', false);
+      perfNotice('خطای ارتباط', false);
+    });
+  });
+
+  $('#mvn-perf-optimize').on('click', function () {
+    if (
+      !window.confirm(
+        'بهینه‌سازی خودکار اجرا شود؟\n\n• پاکسازی transient\n• حذف باقی‌مانده پلاگین‌های حذف‌شده از autoload (Xtra/Codevz، RevSlider، WOOF و …)\n• مسدودسازی دامنه مشکوک\n• حذف revision قدیمی\n• OPTIMIZE TABLE'
+      )
+    ) {
+      return;
+    }
+    var $btn = $(this).prop('disabled', true);
+    perfNotice('در حال بهینه‌سازی...', true);
+    post('mvn_perf_optimize', {})
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (!(res && res.success)) {
+          perfNotice((res && res.data && res.data.message) || MVN.i18n.error, false);
+          return;
+        }
+        var d = res.data || {};
+        var lines = [];
+        if (d.actions && d.actions.length) {
+          d.actions.forEach(function (a) {
+            lines.push((a.label || a.id) + (a.count ? ' (' + a.count + ')' : ''));
+          });
+        }
+        perfNotice((d.message || 'انجام شد') + (lines.length ? ' — ' + lines.join(' · ') : ''), true);
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        perfNotice('خطای ارتباط', false);
+      });
+  });
 })(jQuery);

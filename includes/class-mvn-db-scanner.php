@@ -159,6 +159,9 @@ class MVN_DB_Scanner {
 			if ( apply_filters( 'mvn_db_scan_skip_option', false, $row['option_name'], $row['option_value'], $row ) ) {
 				continue;
 			}
+			if ( mvn_db_is_benign_option( $row['option_name'] ) ) {
+				continue;
+			}
 			self::scan_row( 'options', $row, array( 'option_name', 'option_value' ), $sigs, $state );
 		}
 
@@ -218,6 +221,9 @@ class MVN_DB_Scanner {
 		}
 
 		foreach ( $rows as $row ) {
+			if ( ! empty( $row['meta_key'] ) && mvn_db_is_benign_meta_key( $row['meta_key'] ) ) {
+				continue;
+			}
 			self::scan_row( 'postmeta', $row, array( 'meta_key', 'meta_value' ), $sigs, $state );
 		}
 
@@ -350,11 +356,31 @@ class MVN_DB_Scanner {
 	}
 
 	private static function run_signatures( $table, $row, $column, $content, $rel, $hash, $sigs, &$state ) {
+		// Serialized plugin blobs: only allow high-confidence executable malware signatures.
+		$serialized = function_exists( 'is_serialized' ) && is_serialized( $content );
+		$allow_on_serialized = array(
+			'eval_decoder',
+			'eval_request',
+			'nested_decoders',
+			'shell_exec_request',
+			'webshell_markers',
+			'preg_replace_e',
+		);
+
 		$scope_hint = self::scope_hint( $column, $content );
 
 		foreach ( $sigs as $sig ) {
 			if ( 'htaccess' === $sig['scope'] ) {
 				continue;
+			}
+			if ( $serialized && ! in_array( $sig['id'], $allow_on_serialized, true ) ) {
+				continue;
+			}
+			// File PHP signatures on option/meta values cause mass FPs (base64 in Freemius, RevSlider…).
+			if ( in_array( $column, array( 'option_value', 'meta_value' ), true ) && 'php' === $sig['scope'] ) {
+				if ( ! in_array( $sig['id'], $allow_on_serialized, true ) ) {
+					continue;
+				}
 			}
 			if ( 'php' === $sig['scope'] && 'php' !== $scope_hint && 'any' !== $scope_hint ) {
 				continue;
@@ -368,7 +394,13 @@ class MVN_DB_Scanner {
 				if ( MVN_Scanner::is_db_false_positive( $sig['id'], $table, $row, $column, $content, $offset, $match ) ) {
 					continue;
 				}
-				$action = ( 'none' === $sig['clean'] ) ? 'db_review' : 'db_clean';
+				// Only auto-clean HTML/JS injections in posts — not opaque option blobs.
+				$action = 'db_review';
+				if ( in_array( $column, array( 'post_content', 'post_excerpt', 'post_title' ), true ) && 'none' !== $sig['clean'] ) {
+					$action = 'db_clean';
+				} elseif ( in_array( $sig['id'], $allow_on_serialized, true ) && false !== strpos( $content, '<?php' ) ) {
+					$action = 'db_clean';
+				}
 				if ( MVN_Scanner::add_finding(
 					$state,
 					array(
@@ -433,9 +465,10 @@ class MVN_DB_Scanner {
 				return 'db_delete_option';
 			}
 		}
-		if ( in_array( $column, array( 'option_value', 'post_content', 'post_excerpt', 'meta_value' ), true ) ) {
+		if ( in_array( $column, array( 'post_content', 'post_excerpt' ), true ) ) {
 			return 'db_clean';
 		}
+		// Serialized / opaque options: review only — never auto "db_clean".
 		return 'db_review';
 	}
 

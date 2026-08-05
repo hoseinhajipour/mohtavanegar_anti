@@ -243,6 +243,205 @@ function mvn_size_format( $bytes ) {
 }
 
 /**
+ * Dashboard security checklist (done / pending items with links).
+ *
+ * @param array $ctx Optional preloaded context keys: last, issues, ht, core, hard, integrity, perms.
+ * @return array{items:array,done:int,total:int,pct:int}
+ */
+function mvn_security_checklist( $ctx = array() ) {
+	$last      = isset( $ctx['last'] ) ? $ctx['last'] : get_option( MVN_OPTION_LASTSCAN, array() );
+	$issues    = isset( $ctx['issues'] ) ? $ctx['issues'] : ( class_exists( 'MVN_Scanner' ) ? MVN_Scanner::get_issues() : array() );
+	$ht        = isset( $ctx['ht'] ) ? $ctx['ht'] : ( class_exists( 'MVN_Htaccess_Guard' ) ? MVN_Htaccess_Guard::root_status() : array() );
+	$core      = isset( $ctx['core'] ) ? $ctx['core'] : ( class_exists( 'MVN_Core_Repair' ) ? MVN_Core_Repair::source_status() : array() );
+	$hard      = isset( $ctx['hard'] ) ? $ctx['hard'] : ( class_exists( 'MVN_Hardening' ) ? MVN_Hardening::instance()->settings() : array() );
+	$integrity = isset( $ctx['integrity'] ) ? $ctx['integrity'] : ( class_exists( 'MVN_Core_Integrity' ) ? MVN_Core_Integrity::last_summary() : array() );
+	$perms     = isset( $ctx['perms'] ) ? $ctx['perms'] : ( class_exists( 'MVN_Permissions' ) ? MVN_Permissions::get_state() : array() );
+
+	$issue_count = is_array( $issues ) ? count( $issues ) : 0;
+	$crit        = 0;
+	if ( is_array( $issues ) ) {
+		foreach ( $issues as $iss ) {
+			if ( isset( $iss['severity'] ) && 'critical' === $iss['severity'] ) {
+				$crit++;
+			}
+		}
+	}
+
+	$scanned = ! empty( $last['finished_at'] ) || ! empty( $last['id'] );
+	$ht_ok   = ! empty( $ht['matches'] );
+	$zip_ok  = ! empty( $core['zip_ok'] );
+	$integ_ok = ! empty( $integrity['finished_at'] ) && ! empty( $integrity['ok'] );
+	$integ_ran = ! empty( $integrity['finished_at'] );
+	$perms_ok = ! empty( $perms['status'] ) && 'done' === $perms['status'];
+	$https_ok = ( is_ssl() || ( 0 === strpos( (string) home_url(), 'https://' ) ) );
+	$debug_ok = ! ( defined( 'WP_DEBUG' ) && WP_DEBUG && ( ! defined( 'WP_DEBUG_DISPLAY' ) || WP_DEBUG_DISPLAY ) );
+
+	$items = array(
+		array(
+			'id'     => 'scan',
+			'title'  => 'اسکن امنیتی سایت',
+			'desc'   => $scanned ? 'آخرین اسکن انجام شده' : 'هنوز اسکنی ثبت نشده',
+			'done'   => $scanned,
+			'url'    => admin_url( 'admin.php?page=mvn-scan' ),
+			'action' => 'شروع اسکن',
+		),
+		array(
+			'id'     => 'fix_issues',
+			'title'  => 'رفع یافته‌های باز',
+			'desc'   => $issue_count > 0
+				? sprintf( '%d مورد باز%s', $issue_count, $crit > 0 ? ' (' . $crit . ' بحرانی)' : '' )
+				: ( $scanned ? 'مورد بازی باقی نمانده' : 'پس از اسکن بررسی شود' ),
+			'done'   => $scanned && 0 === $issue_count,
+			'url'    => admin_url( 'admin.php?page=mvn-fix' ),
+			'action' => 'رفع مشکلات',
+		),
+		array(
+			'id'     => 'core_integrity',
+			'title'  => 'یکپارچگی هسته وردپرس',
+			'desc'   => ! $integ_ran
+				? 'checksum هسته هنوز اجرا نشده'
+				: ( $integ_ok ? 'هسته سالم است' : 'تغییر/حذف در فایل‌های هسته یافت شد' ),
+			'done'   => $integ_ok,
+			'url'    => admin_url( 'admin.php?page=mvn-repair' ),
+			'action' => 'بررسی هسته',
+		),
+		array(
+			'id'     => 'core_zip',
+			'title'  => 'منبع تعمیر هسته (zip)',
+			'desc'   => $zip_ok ? 'wordpress_core.zip آماده است' : 'فایل zip سالم در دسترس نیست',
+			'done'   => $zip_ok,
+			'url'    => admin_url( 'admin.php?page=mvn-repair' ),
+			'action' => 'صفحه تعمیر',
+		),
+		array(
+			'id'     => 'htaccess',
+			'title'  => 'htaccess ریشه امن',
+			'desc'   => $ht_ok
+				? 'مطابق پیش‌فرض پلاگین'
+				: ( empty( $ht['exists'] ) ? 'فایل وجود ندارد' : 'با پیش‌فرض متفاوت است' ),
+			'done'   => $ht_ok,
+			'url'    => admin_url( 'admin.php?page=mvn-repair' ),
+			'action' => 'بازیابی htaccess',
+		),
+		array(
+			'id'     => 'permissions',
+			'title'  => 'اصلاح سطح دسترسی فایل‌ها',
+			'desc'   => $perms_ok ? 'آخرین اجرای اصلاح دسترسی انجام شده' : 'هنوز اجرا نشده یا ناتمام است',
+			'done'   => $perms_ok,
+			'url'    => admin_url( 'admin.php?page=mvn-repair' ),
+			'action' => 'اصلاح دسترسی',
+		),
+		array(
+			'id'     => 'xmlrpc',
+			'title'  => 'مسدودسازی XML-RPC',
+			'desc'   => ! empty( $hard['block_xmlrpc'] ) ? 'فعال' : 'غیرفعال — خطر brute-force / pingback',
+			'done'   => ! empty( $hard['block_xmlrpc'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'brute_force',
+			'title'  => 'محافظت Brute Force ورود',
+			'desc'   => ! empty( $hard['login_brute_force'] ) ? 'فعال' : 'غیرفعال',
+			'done'   => ! empty( $hard['login_brute_force'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'file_edit',
+			'title'  => 'غیرفعال‌سازی ویرایشگر فایل',
+			'desc'   => ! empty( $hard['disable_file_edit'] ) ? 'DISALLOW_FILE_EDIT فعال' : 'ویرایشگر پوسته/افزونه باز است',
+			'done'   => ! empty( $hard['disable_file_edit'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'user_enum',
+			'title'  => 'جلوگیری از User Enumeration',
+			'desc'   => ! empty( $hard['block_user_enum'] ) ? 'فعال' : 'غیرفعال',
+			'done'   => ! empty( $hard['block_user_enum'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'hide_version',
+			'title'  => 'مخفی‌سازی نسخه وردپرس',
+			'desc'   => ! empty( $hard['hide_wp_version'] ) ? 'فعال' : 'نسخه در خروجی افشا می‌شود',
+			'done'   => ! empty( $hard['hide_wp_version'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'headers',
+			'title'  => 'هدرهای امنیتی HTTP',
+			'desc'   => ! empty( $hard['secure_headers'] ) ? 'فعال' : 'غیرفعال',
+			'done'   => ! empty( $hard['secure_headers'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'disable_comments',
+			'title'  => 'عدم درج نظرات در کل سایت',
+			'desc'   => ! empty( $hard['disable_comments'] ) ? 'نظرات در کل سایت بسته است' : 'نظرات هنوز باز است (اختیاری)',
+			'done'   => ! empty( $hard['disable_comments'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'block_external_http',
+			'title'  => 'مسدودسازی HTTP خارجی',
+			'desc'   => ! empty( $hard['block_external_http'] ) || ( defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL )
+				? 'WP_HTTP_BLOCK_EXTERNAL فعال است'
+				: 'درخواست‌های خارجی هنوز مجازند (اختیاری)',
+			'done'   => ! empty( $hard['block_external_http'] ) || ( defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'block_privileged_signup',
+			'title'  => 'عدم ثبت‌نام مدیر / نویسنده',
+			'desc'   => ! empty( $hard['block_privileged_signup'] )
+				? 'ایجاد کاربر جدید با نقش مدیر/نویسنده مسدود است'
+				: 'هنوز می‌توان کاربر جدید مدیر یا نویسنده ساخت (اختیاری)',
+			'done'   => ! empty( $hard['block_privileged_signup'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
+			'id'     => 'https',
+			'title'  => 'HTTPS روی سایت',
+			'desc'   => $https_ok ? 'آدرس سایت روی HTTPS است' : 'سایت روی HTTP است — رمزنگاری نیست',
+			'done'   => $https_ok,
+			'url'    => admin_url( 'options-general.php' ),
+			'action' => 'تنظیمات عمومی',
+		),
+		array(
+			'id'     => 'debug',
+			'title'  => 'خاموش بودن نمایش Debug',
+			'desc'   => $debug_ok ? 'نمایش خطای Debug در فرانت فعال نیست' : 'WP_DEBUG با نمایش خطا روشن است',
+			'done'   => $debug_ok,
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'بررسی',
+		),
+	);
+
+	$done = 0;
+	foreach ( $items as $item ) {
+		if ( ! empty( $item['done'] ) ) {
+			$done++;
+		}
+	}
+	$total = count( $items );
+
+	return array(
+		'items' => $items,
+		'done'  => $done,
+		'total' => $total,
+		'pct'   => $total ? (int) round( ( $done / $total ) * 100 ) : 0,
+	);
+}
+
+/**
  * List files under a directory; paths are relative to $root_abs (not ABSPATH).
  *
  * @param string $root_abs Absolute directory.
