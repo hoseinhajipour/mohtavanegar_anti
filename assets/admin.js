@@ -67,51 +67,126 @@
   }
 
   /* ---------- Scan ---------- */
+  var scanTimer = null;
+  var scanBusy = false;
+
+  function clearScanTimer() {
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
+  }
+
+  function setScanControls(status) {
+    var running = status === 'running';
+    var paused = status === 'paused';
+    var active = running || paused;
+    $('#mvn-scan-start').prop('disabled', active);
+    $('#mvn-scan-scope, #mvn-scan-deep, #mvn-scan-core, #mvn-scan-db, #mvn-scan-incremental, #mvn-scan-full').prop('disabled', active);
+    $('#mvn-scan-pause').toggle(running);
+    $('#mvn-scan-resume').toggle(paused);
+    $('#mvn-scan-stop').toggle(active);
+    if (active) {
+      $('#mvn-scan-progress').show();
+    }
+  }
+
+  function renderScanProgress(s) {
+    var p = pct(s.processed, s.total);
+    $('#mvn-scan-bar').css('width', p + '%');
+    $('#mvn-scan-pct').text(p + '%');
+    var label = scanPhaseLabel(s) + ' — بررسی‌شده: ' + s.processed + ' / ' + s.total + ' — یافته‌ها: ' + s.issue_count;
+    if (s.status === 'paused') {
+      label = '⏸ متوقف موقت — ' + label;
+    }
+    if (s.incremental && s.skipped_unchanged) {
+      label += ' — ردشده: ' + s.skipped_unchanged;
+    }
+    $('#mvn-scan-label').text(label);
+    $('#mvn-scan-stats').text(scanStatsText(s));
+  }
+
+  function finishScanUi(s) {
+    clearScanTimer();
+    scanBusy = false;
+    setScanControls(s.status || 'idle');
+    if (s.status === 'done') {
+      $('#mvn-scan-label').text(MVN.i18n.done);
+      var html =
+        '<div class="mvn-notice mvn-notice-ok">اسکن تمام شد. تعداد مشکلات: <b>' +
+        s.issue_count +
+        '</b>';
+      if (s.incremental && s.skipped_unchanged) {
+        html += ' — ردشده (بدون تغییر): <b>' + s.skipped_unchanged + '</b>';
+      }
+      html += '. ';
+      if (s.issue_count > 0) {
+        html += '<a href="admin.php?page=mvn-fix">رفتن به صفحه رفع مشکلات</a>';
+      }
+      html += '</div>';
+      $('#mvn-scan-result').show().html(html);
+    } else if (s.status === 'stopped') {
+      $('#mvn-scan-label').text(MVN.i18n.stopped || 'اسکن متوقف شد');
+      var htmlStop =
+        '<div class="mvn-notice mvn-notice-err">اسکن متوقف شد. یافته‌های فعلی: <b>' +
+        s.issue_count +
+        '</b>. ';
+      if (s.issue_count > 0) {
+        htmlStop += '<a href="admin.php?page=mvn-fix">رفتن به صفحه رفع مشکلات</a>';
+      }
+      htmlStop += '</div>';
+      $('#mvn-scan-result').show().html(htmlStop);
+    } else if (s.status === 'paused') {
+      $('#mvn-scan-label').text(MVN.i18n.paused || 'اسکن متوقف موقت شد');
+      notice(
+        $('#mvn-scan-result').show(),
+        (MVN.i18n.paused || 'اسکن متوقف موقت شد') +
+          ' — بررسی‌شده: ' +
+          s.processed +
+          '/' +
+          s.total +
+          ' — یافته‌ها: ' +
+          s.issue_count,
+        true
+      );
+    }
+  }
+
+  function scheduleScanTick() {
+    clearScanTimer();
+    scanTimer = setTimeout(runScanLoop, 80);
+  }
+
   function runScanLoop() {
+    if (scanBusy) return;
+    scanBusy = true;
     post('mvn_scan_tick')
       .done(function (res) {
+        scanBusy = false;
         if (!res || !res.success) {
-          notice($('#mvn-scan-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          notice($('#mvn-scan-result').show(), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          setScanControls('idle');
           return;
         }
         var s = res.data;
-        var p = pct(s.processed, s.total);
-        $('#mvn-scan-bar').css('width', p + '%');
-        $('#mvn-scan-pct').text(p + '%');
-        var label = scanPhaseLabel(s) + ' — بررسی‌شده: ' + s.processed + ' / ' + s.total + ' — یافته‌ها: ' + s.issue_count;
-        if (s.incremental && s.skipped_unchanged) {
-          label += ' — ردشده: ' + s.skipped_unchanged;
-        }
-        $('#mvn-scan-label').text(label);
-        $('#mvn-scan-stats').text(scanStatsText(s));
+        renderScanProgress(s);
+        setScanControls(s.status);
 
         if (s.status === 'running') {
-          setTimeout(runScanLoop, 80);
-        } else if (s.status === 'done') {
-          $('#mvn-scan-label').text(MVN.i18n.done);
-          var html =
-            '<div class="mvn-notice mvn-notice-ok">اسکن تمام شد. تعداد مشکلات: <b>' +
-            s.issue_count +
-            '</b>';
-          if (s.incremental && s.skipped_unchanged) {
-            html += ' — ردشده (بدون تغییر): <b>' + s.skipped_unchanged + '</b>';
-          }
-          html += '. ';
-          if (s.issue_count > 0) {
-            html +=
-              '<a href="admin.php?page=mvn-fix">رفتن به صفحه رفع مشکلات</a>';
-          }
-          html += '</div>';
-          $('#mvn-scan-result').show().html(html);
-          $('#mvn-scan-start').prop('disabled', false);
+          scheduleScanTick();
+        } else if (s.status === 'paused') {
+          finishScanUi(s);
+        } else if (s.status === 'done' || s.status === 'stopped') {
+          finishScanUi(s);
         } else {
           notice($('#mvn-scan-result').show(), 'وضعیت نامشخص: ' + s.status, false);
-          $('#mvn-scan-start').prop('disabled', false);
+          setScanControls('idle');
         }
       })
       .fail(function () {
+        scanBusy = false;
         notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
-        $('#mvn-scan-start').prop('disabled', false);
+        setScanControls('idle');
       });
   }
 
@@ -134,6 +209,7 @@
     $('#mvn-scan-result').hide().empty();
     $('#mvn-scan-bar').css('width', '0%');
     $('#mvn-scan-label').text(MVN.i18n.scanning);
+    setScanControls('running');
 
     var full = $('#mvn-scan-full').is(':checked');
     post('mvn_scan_start', {
@@ -147,16 +223,92 @@
       .done(function (res) {
         if (!res || !res.success) {
           notice($('#mvn-scan-result').show(), (res && res.data && res.data.message) || MVN.i18n.error, false);
-          $btn.prop('disabled', false);
+          setScanControls('idle');
           return;
         }
-        setTimeout(runScanLoop, 50);
+        renderScanProgress(res.data);
+        scheduleScanTick();
       })
       .fail(function () {
         notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
-        $btn.prop('disabled', false);
+        setScanControls('idle');
       });
   });
+
+  $('#mvn-scan-pause').on('click', function () {
+    clearScanTimer();
+    $(this).prop('disabled', true);
+    post('mvn_scan_pause')
+      .done(function (res) {
+        $('#mvn-scan-pause').prop('disabled', false);
+        if (!res || !res.success) {
+          notice($('#mvn-scan-result').show(), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          scheduleScanTick();
+          return;
+        }
+        renderScanProgress(res.data);
+        finishScanUi(res.data);
+      })
+      .fail(function () {
+        $('#mvn-scan-pause').prop('disabled', false);
+        notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
+        scheduleScanTick();
+      });
+  });
+
+  $('#mvn-scan-resume').on('click', function () {
+    $(this).prop('disabled', true);
+    $('#mvn-scan-result').hide().empty();
+    post('mvn_scan_resume')
+      .done(function (res) {
+        $('#mvn-scan-resume').prop('disabled', false);
+        if (!res || !res.success) {
+          notice($('#mvn-scan-result').show(), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          return;
+        }
+        renderScanProgress(res.data);
+        setScanControls('running');
+        scheduleScanTick();
+      })
+      .fail(function () {
+        $('#mvn-scan-resume').prop('disabled', false);
+        notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
+      });
+  });
+
+  $('#mvn-scan-stop').on('click', function () {
+    if (!window.confirm(MVN.i18n.confirm_stop || MVN.i18n.confirm)) return;
+    clearScanTimer();
+    $(this).prop('disabled', true);
+    post('mvn_scan_stop')
+      .done(function (res) {
+        $('#mvn-scan-stop').prop('disabled', false);
+        if (!res || !res.success) {
+          notice($('#mvn-scan-result').show(), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          return;
+        }
+        renderScanProgress(res.data);
+        finishScanUi(res.data);
+      })
+      .fail(function () {
+        $('#mvn-scan-stop').prop('disabled', false);
+        notice($('#mvn-scan-result').show(), 'خطای ارتباط با سرور', false);
+      });
+  });
+
+  // Resume UI if page reloaded mid-scan.
+  if (window.MVN_SCAN_BOOT && window.MVN_SCAN_BOOT.status === 'running') {
+    setScanControls('running');
+    scheduleScanTick();
+  } else if (window.MVN_SCAN_BOOT && window.MVN_SCAN_BOOT.status === 'paused') {
+    setScanControls('paused');
+    post('mvn_scan_status').done(function (res) {
+      if (res && res.success) {
+        renderScanProgress(res.data);
+        finishScanUi(res.data);
+      }
+    });
+  }
 
   /* ---------- Ignore (mark safe) ---------- */
   $(document).on('click', '.mvn-ignore-one', function () {
@@ -209,43 +361,84 @@
   });
 
   /* ---------- Fix batch ---------- */
+  var fixBatchRunning = false;
+
+  function setFixBatchButtonsDisabled(disabled) {
+    $('.mvn-fix-batch').prop('disabled', disabled);
+  }
+
   function runFixBatch(filter, totalHint) {
+    if (fixBatchRunning) return;
+    fixBatchRunning = true;
     $('#mvn-fix-progress').show();
+    setFixBatchButtonsDisabled(true);
+
     post('mvn_fix_batch', { filter: filter || '' })
       .done(function (res) {
         if (!res || !res.success) {
           $('#mvn-fix-label').text((res && res.data && res.data.message) || MVN.i18n.error);
+          fixBatchRunning = false;
+          setFixBatchButtonsDisabled(false);
           return;
         }
         var r = res.data;
         var rem = r.remaining || 0;
-        var doneHint = totalHint ? totalHint - rem : r.fixed;
-        var p = totalHint ? pct(doneHint, totalHint) : 50;
+        var doneTotal = totalHint ? totalHint - rem : r.fixed;
+        var p = totalHint ? pct(Math.max(0, doneTotal), totalHint) : 50;
         $('#mvn-fix-bar').css('width', p + '%');
-        $('#mvn-fix-label').text(
-          'رفع‌شده در این دسته: ' + r.fixed + ' | ناموفق: ' + r.failed + ' | باقی‌مانده: ' + rem
-        );
-        if (rem > 0 && (r.fixed > 0 || r.failed === 0)) {
-          setTimeout(function () {
-            runFixBatch(filter, totalHint || rem + r.fixed);
-          }, 100);
-        } else {
-          $('#mvn-fix-label').text(MVN.i18n.done + ' — صفحه را تازه کنید.');
-          setTimeout(function () {
-            window.location.reload();
-          }, 800);
+        var label =
+          'رفع‌شده: ' + r.fixed + ' | ناموفق: ' + r.failed + ' | باقی‌مانده: ' + rem;
+        if (r.errors && r.errors.length) {
+          label += ' — ' + r.errors.slice(0, 3).join(' | ');
         }
+        $('#mvn-fix-label').text(label);
+
+        if (r.fixed > 0 && rem > 0) {
+          setTimeout(function () {
+            fixBatchRunning = false;
+            runFixBatch(filter, totalHint);
+          }, 100);
+          return;
+        }
+
+        fixBatchRunning = false;
+
+        if (r.fixed === 0 && r.failed === 0 && rem > 0 && filter) {
+          $('#mvn-fix-label').text('موردی با این فیلتر برای رفع یافت نشد.');
+          setFixBatchButtonsDisabled(false);
+          return;
+        }
+
+        if (r.failed > 0 && rem > 0) {
+          $('#mvn-fix-label').text(
+            MVN.i18n.done + ' — برخی موارد ناموفق بودند. صفحه در حال تازه‌سازی...'
+          );
+        } else {
+          $('#mvn-fix-label').text(MVN.i18n.done + ' — صفحه در حال تازه‌سازی...');
+        }
+        setTimeout(function () {
+          window.location.reload();
+        }, 800);
       })
       .fail(function () {
         $('#mvn-fix-label').text('خطای ارتباط');
+        fixBatchRunning = false;
+        setFixBatchButtonsDisabled(false);
       });
   }
 
-  $('#mvn-fix-all, #mvn-fix-htaccess, #mvn-fix-clean, #mvn-fix-uploads, #mvn-fix-db-clean, #mvn-fix-db-option').on('click', function () {
+  $('.mvn-fix-batch').on('click', function () {
+    if ($(this).prop('disabled')) return;
     if (!window.confirm(MVN.i18n.confirm)) return;
     var filter = $(this).data('filter') || '';
-    var total = $('#mvn-issues-table tbody tr').length;
-    $(this).prop('disabled', true);
+    var total = filter ? parseInt($(this).text().match(/\((\d+)\)/)?.[1] || '0', 10) : parseInt(
+      $('#mvn-fix-all').text().match(/\((\d+)\)/)?.[1] || $('#mvn-issues-table tbody tr').length,
+      10
+    );
+    if (!total) {
+      total = $('#mvn-issues-table tbody tr').length;
+    }
+    $('#mvn-fix-bar').css('width', '0%');
     runFixBatch(filter, total);
   });
 

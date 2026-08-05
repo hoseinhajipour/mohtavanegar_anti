@@ -20,15 +20,30 @@ class MVN_Quarantine {
 		if ( ! $abs || ! is_file( $abs ) || ! is_readable( $abs ) ) {
 			return false;
 		}
-		mvn_ensure_data_dirs();
-		$id   = gmdate( 'Ymd-His' ) . '-' . substr( md5( $rel . microtime( true ) ), 0, 8 );
-		$dir  = mvn_data_dir() . '/quarantine/' . $id;
-		wp_mkdir_p( $dir );
-
 		$content = @file_get_contents( $abs );
 		if ( false === $content ) {
 			return false;
 		}
+		return self::store_text( $rel, $content, $meta );
+	}
+
+	/**
+	 * Store arbitrary text/binary payload (e.g. DB row backup).
+	 *
+	 * @param string $rel     Logical path label.
+	 * @param string $content Payload bytes.
+	 * @param array  $meta    Extra metadata.
+	 * @return string|false Quarantine id.
+	 */
+	public static function store_text( $rel, $content, $meta = array() ) {
+		if ( ! is_string( $content ) ) {
+			return false;
+		}
+		mvn_ensure_data_dirs();
+		$id  = gmdate( 'Ymd-His' ) . '-' . substr( md5( $rel . microtime( true ) ), 0, 8 );
+		$dir = mvn_data_dir() . '/quarantine/' . $id;
+		wp_mkdir_p( $dir );
+
 		$saved = @file_put_contents( $dir . '/payload.bin', $content );
 		if ( false === $saved ) {
 			return false;

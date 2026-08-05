@@ -66,23 +66,35 @@ class MVN_Cleaner {
 		$issues = MVN_Scanner::get_issues();
 		$fixed  = 0;
 		$failed = 0;
+		$skipped = 0;
 		$errors = array();
 		$kept   = array();
+		$skip_actions = array( 'core_repair', 'db_review' );
 
 		foreach ( $issues as $issue ) {
+			$action = isset( $issue['action'] ) ? $issue['action'] : '';
+
 			if ( $fixed + $failed >= $limit ) {
 				$kept[] = $issue;
 				continue;
 			}
-			if ( $action_filter && ( empty( $issue['action'] ) || $issue['action'] !== $action_filter ) ) {
+
+			if ( $action_filter && ( empty( $action ) || $action !== $action_filter ) ) {
 				$kept[] = $issue;
 				continue;
 			}
+
+			if ( ! $action_filter && in_array( $action, $skip_actions, true ) ) {
+				$kept[] = $issue;
+				$skipped++;
+				continue;
+			}
+
 			$r = self::apply( $issue );
 			if ( is_wp_error( $r ) ) {
 				$failed++;
-				$errors[] = $issue['rel'] . ': ' . $r->get_error_message();
-				$kept[]   = $issue; // keep so user can retry
+				$errors[] = ( isset( $issue['rel'] ) ? $issue['rel'] : '?' ) . ': ' . $r->get_error_message();
+				$kept[]   = $issue;
 			} else {
 				$fixed++;
 			}
@@ -92,6 +104,7 @@ class MVN_Cleaner {
 		return array(
 			'fixed'     => $fixed,
 			'failed'    => $failed,
+			'skipped'   => $skipped,
 			'remaining' => count( $kept ),
 			'errors'    => $errors,
 		);
@@ -292,19 +305,19 @@ class MVN_Cleaner {
 			return new WP_Error( 'db_uncleanable', 'کد مخرب در دیتابیس قابل حذف خودکار نبود — بررسی دستی لازم است.' );
 		}
 
-		$backup_id = MVN_Quarantine::store(
+		$backup_id = MVN_Quarantine::store_text(
 			isset( $issue['rel'] ) ? $issue['rel'] : 'db:backup',
+			wp_json_encode(
+				array(
+					'table'  => $table,
+					'row_id' => $row_id,
+					'column' => $column,
+					'before' => $original,
+				)
+			),
 			array(
 				'reason' => 'db-pre-clean',
 				'issue'  => $issue,
-				'payload' => wp_json_encode(
-					array(
-						'table'  => $table,
-						'row_id' => $row_id,
-						'column' => $column,
-						'before' => $original,
-					)
-				),
 			)
 		);
 		if ( ! $backup_id ) {
@@ -340,12 +353,12 @@ class MVN_Cleaner {
 		}
 
 		$value = isset( $fetch['row']['option_value'] ) ? $fetch['row']['option_value'] : '';
-		$backup_id = MVN_Quarantine::store(
+		$backup_id = MVN_Quarantine::store_text(
 			'db:options:' . $name,
+			wp_json_encode( array( 'option_name' => $name, 'option_value' => $value ) ),
 			array(
-				'reason'  => 'db-option-delete',
-				'issue'   => $issue,
-				'payload' => wp_json_encode( array( 'option_name' => $name, 'option_value' => $value ) ),
+				'reason' => 'db-option-delete',
+				'issue'  => $issue,
 			)
 		);
 		if ( ! $backup_id ) {

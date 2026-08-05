@@ -164,7 +164,7 @@ class MVN_Scanner {
 				$state['core_extras'] = array();
 				self::after_core_phase( $state );
 			} else {
-				mvn_state_write( self::STATE_KEY, $state );
+				self::commit_tick_state( $state );
 			}
 			return $state;
 		}
@@ -175,7 +175,7 @@ class MVN_Scanner {
 			if ( MVN_DB_Scanner::is_done( $state ) ) {
 				self::finish_scan( $state );
 			} else {
-				mvn_state_write( self::STATE_KEY, $state );
+				self::commit_tick_state( $state );
 			}
 			return $state;
 		}
@@ -200,10 +200,24 @@ class MVN_Scanner {
 		if ( $end >= $total ) {
 			self::after_files_phase( $state );
 		} else {
-			mvn_state_write( self::STATE_KEY, $state );
+			self::commit_tick_state( $state );
 		}
 
 		return $state;
+	}
+
+	/**
+	 * Persist tick progress without clobbering a concurrent pause/stop.
+	 */
+	private static function commit_tick_state( &$state ) {
+		$latest = mvn_state_read( self::STATE_KEY );
+		if ( ! empty( $latest['status'] ) && 'paused' === $latest['status'] ) {
+			$state['status']    = 'paused';
+			$state['paused_at'] = isset( $latest['paused_at'] ) ? $latest['paused_at'] : gmdate( 'c' );
+		} elseif ( ! empty( $latest['status'] ) && 'stopped' === $latest['status'] ) {
+			return;
+		}
+		mvn_state_write( self::STATE_KEY, $state );
 	}
 
 	/**
@@ -255,24 +269,89 @@ class MVN_Scanner {
 	}
 
 	/**
-	 * Finalize scan — persist issues and last-scan summary.
+	 * Pause a running scan (keeps progress for resume).
+	 *
+	 * @return array|WP_Error
 	 */
-	private static function finish_scan( &$state ) {
-		$state['status']      = 'done';
+	public static function pause() {
+		$state = mvn_state_read( self::STATE_KEY );
+		if ( empty( $state ) || empty( $state['status'] ) ) {
+			return new WP_Error( 'no_scan', 'اسکن فعالی وجود ندارد.' );
+		}
+		if ( 'running' !== $state['status'] ) {
+			return new WP_Error( 'not_running', 'اسکن در حال اجرا نیست.' );
+		}
+		MVN_File_Index::flush();
+		$state['status']     = 'paused';
+		$state['paused_at']  = gmdate( 'c' );
+		$state['updated_at'] = gmdate( 'c' );
+		mvn_state_write( self::STATE_KEY, $state );
+		mvn_log( 'Scan paused: ' . ( isset( $state['id'] ) ? $state['id'] : '' ) . ' processed=' . ( isset( $state['processed'] ) ? $state['processed'] : 0 ) );
+		return $state;
+	}
+
+	/**
+	 * Resume a paused scan.
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function resume() {
+		$state = mvn_state_read( self::STATE_KEY );
+		if ( empty( $state ) || empty( $state['status'] ) ) {
+			return new WP_Error( 'no_scan', 'اسکن فعالی وجود ندارد.' );
+		}
+		if ( 'paused' !== $state['status'] ) {
+			return new WP_Error( 'not_paused', 'اسکن در حالت توقف موقت نیست.' );
+		}
+		$state['status']     = 'running';
+		$state['updated_at'] = gmdate( 'c' );
+		unset( $state['paused_at'] );
+		mvn_state_write( self::STATE_KEY, $state );
+		mvn_log( 'Scan resumed: ' . ( isset( $state['id'] ) ? $state['id'] : '' ) );
+		return $state;
+	}
+
+	/**
+	 * Stop scan permanently and keep findings found so far.
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function stop() {
+		$state = mvn_state_read( self::STATE_KEY );
+		if ( empty( $state ) || empty( $state['status'] ) ) {
+			return new WP_Error( 'no_scan', 'اسکن فعالی وجود ندارد.' );
+		}
+		if ( ! in_array( $state['status'], array( 'running', 'paused' ), true ) ) {
+			return new WP_Error( 'not_active', 'اسکن فعالی برای توقف وجود ندارد.' );
+		}
+		MVN_File_Index::flush();
+		self::finish_scan( $state, 'stopped' );
+		mvn_log( 'Scan stopped: issues=' . ( isset( $state['issues'] ) ? count( $state['issues'] ) : 0 ) );
+		return $state;
+	}
+
+	/**
+	 * Finalize scan — persist issues and last-scan summary.
+	 *
+	 * @param array  $state  Scan state.
+	 * @param string $status Final status: done|stopped.
+	 */
+	private static function finish_scan( &$state, $status = 'done' ) {
+		$state['status']      = in_array( $status, array( 'done', 'stopped' ), true ) ? $status : 'done';
 		$state['finished_at'] = gmdate( 'c' );
-		$issues               = self::sort_issues( $state['issues'] );
+		$issues               = self::sort_issues( isset( $state['issues'] ) ? $state['issues'] : array() );
 		update_option( MVN_OPTION_ISSUES, $issues, false );
 
-		$file_total  = isset( $state['file_total'] ) ? (int) $state['file_total'] : (int) $state['total'];
-		$db_total    = isset( $state['db_total'] ) ? (int) $state['db_total'] : 0;
-		$core_total  = isset( $state['core_files'] ) && is_array( $state['core_files'] ) ? count( $state['core_files'] ) : 0;
+		$file_total = isset( $state['file_total'] ) ? (int) $state['file_total'] : (int) ( isset( $state['total'] ) ? $state['total'] : 0 );
+		$db_total   = isset( $state['db_total'] ) ? (int) $state['db_total'] : 0;
 
 		update_option(
 			MVN_OPTION_LASTSCAN,
 			array(
-				'id'                => $state['id'],
-				'started_at'        => $state['started_at'],
+				'id'                => isset( $state['id'] ) ? $state['id'] : '',
+				'started_at'        => isset( $state['started_at'] ) ? $state['started_at'] : '',
 				'finished_at'       => $state['finished_at'],
+				'status'            => $state['status'],
 				'total'             => $file_total + $db_total,
 				'file_total'        => $file_total,
 				'db_total'          => $db_total,
@@ -281,15 +360,17 @@ class MVN_Scanner {
 				'incremental'       => ! empty( $state['incremental'] ),
 				'scan_db'           => ! empty( $state['scan_db'] ),
 				'scan_core'         => ! empty( $state['scan_core'] ),
-				'stats'             => $state['stats'],
+				'stats'             => isset( $state['stats'] ) ? $state['stats'] : array(),
 				'issue_count'       => count( $issues ),
 			),
 			false
 		);
-		mvn_log( 'Scan done: issues=' . count( $issues ) . ' core=' . ( isset( $state['stats']['core'] ) ? $state['stats']['core'] : 0 ) . ' db=' . ( isset( $state['stats']['db'] ) ? $state['stats']['db'] : 0 ) );
-		$state['issues']    = $issues;
-		$state['files']     = array();
-		$state['all_files'] = array();
+		mvn_log( 'Scan ' . $state['status'] . ': issues=' . count( $issues ) . ' core=' . ( isset( $state['stats']['core'] ) ? $state['stats']['core'] : 0 ) . ' db=' . ( isset( $state['stats']['db'] ) ? $state['stats']['db'] : 0 ) );
+		$state['issues']      = $issues;
+		$state['files']       = array();
+		$state['all_files']   = array();
+		$state['core_files']  = array();
+		$state['core_extras'] = array();
 		mvn_state_write( self::STATE_KEY, $state );
 	}
 
@@ -666,6 +747,43 @@ class MVN_Scanner {
 		return self::sort_issues( $issues );
 	}
 
+	/**
+	 * Count open issues grouped by action type.
+	 *
+	 * @return array<string,int>
+	 */
+	public static function count_by_action( $issues = null ) {
+		if ( null === $issues ) {
+			$issues = self::get_issues();
+		}
+		$counts = array(
+			'total'              => 0,
+			'fixable'            => 0,
+			'clean'              => 0,
+			'delete_htaccess'    => 0,
+			'quarantine_delete'  => 0,
+			'quarantine'         => 0,
+			'db_clean'           => 0,
+			'db_delete_option'   => 0,
+			'core_repair'        => 0,
+			'db_review'          => 0,
+		);
+		if ( ! is_array( $issues ) ) {
+			return $counts;
+		}
+		foreach ( $issues as $issue ) {
+			$counts['total']++;
+			$action = isset( $issue['action'] ) ? $issue['action'] : '';
+			if ( isset( $counts[ $action ] ) ) {
+				$counts[ $action ]++;
+			}
+			if ( ! in_array( $action, array( 'core_repair', 'db_review' ), true ) ) {
+				$counts['fixable']++;
+			}
+		}
+		return $counts;
+	}
+
 	public static function clear_issues() {
 		update_option( MVN_OPTION_ISSUES, array(), false );
 	}
@@ -739,5 +857,93 @@ class MVN_Scanner {
 
 		mvn_log( 'Issue ignored: ' . $id . ( $permanent ? ' (permanent)' : '' ) );
 		return true;
+	}
+
+	/**
+	 * Build UTF-8 CSV export for open scan issues.
+	 *
+	 * @param array $issues Issue list (defaults to stored issues).
+	 * @return string
+	 */
+	public static function issues_to_csv( $issues = null ) {
+		if ( null === $issues ) {
+			$issues = self::get_issues();
+		}
+		if ( ! is_array( $issues ) ) {
+			$issues = array();
+		}
+
+		$fh = fopen( 'php://temp', 'r+' );
+		if ( false === $fh ) {
+			return '';
+		}
+
+		fwrite( $fh, "\xEF\xBB\xBF" );
+		fputcsv(
+			$fh,
+			array(
+				'شناسه',
+				'اطمینان٪',
+				'برچسب اطمینان',
+				'شدت',
+				'منبع',
+				'مسیر',
+				'جدول',
+				'ستون',
+				'امضا',
+				'نوع تهدید',
+				'جزئیات',
+				'اقدام',
+				'نمونه کد',
+				'MD5 مورد انتظار',
+				'MD5 فعلی',
+			)
+		);
+
+		foreach ( $issues as $iss ) {
+			$severity = isset( $iss['severity'] ) ? $iss['severity'] : '';
+			if ( 'critical' === $severity ) {
+				$severity_label = 'بحرانی';
+			} elseif ( 'warning' === $severity ) {
+				$severity_label = 'هشدار';
+			} else {
+				$severity_label = 'اطلاع';
+			}
+
+			$actual_hash = '';
+			if ( ! empty( $iss['actual_hash'] ) ) {
+				$actual_hash = $iss['actual_hash'];
+			} elseif ( ! empty( $iss['file_hash'] ) ) {
+				$actual_hash = $iss['file_hash'];
+			} elseif ( ! empty( $iss['content_hash'] ) ) {
+				$actual_hash = $iss['content_hash'];
+			}
+
+			fputcsv(
+				$fh,
+				array(
+					isset( $iss['id'] ) ? $iss['id'] : '',
+					isset( $iss['confidence'] ) ? (int) $iss['confidence'] : '',
+					isset( $iss['conf_label'] ) ? $iss['conf_label'] : '',
+					$severity_label,
+					isset( $iss['source'] ) ? $iss['source'] : 'file',
+					isset( $iss['rel'] ) ? $iss['rel'] : '',
+					isset( $iss['table'] ) ? $iss['table'] : '',
+					isset( $iss['column'] ) ? $iss['column'] : '',
+					isset( $iss['sig'] ) ? $iss['sig'] : '',
+					isset( $iss['label'] ) ? $iss['label'] : '',
+					isset( $iss['detail'] ) ? $iss['detail'] : '',
+					isset( $iss['action'] ) ? $iss['action'] : '',
+					isset( $iss['snippet'] ) ? $iss['snippet'] : '',
+					isset( $iss['expected_hash'] ) ? $iss['expected_hash'] : '',
+					$actual_hash,
+				)
+			);
+		}
+
+		rewind( $fh );
+		$csv = stream_get_contents( $fh );
+		fclose( $fh );
+		return is_string( $csv ) ? $csv : '';
 	}
 }

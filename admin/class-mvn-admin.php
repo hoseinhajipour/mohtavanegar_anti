@@ -22,11 +22,15 @@ class MVN_Admin {
 	public function boot() {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
+		add_action( 'admin_init', array( $this, 'maybe_export_issues_csv' ) );
 
 		$ajax = array(
 			'mvn_scan_start',
 			'mvn_scan_tick',
 			'mvn_scan_status',
+			'mvn_scan_pause',
+			'mvn_scan_resume',
+			'mvn_scan_stop',
 			'mvn_fix_one',
 			'mvn_fix_batch',
 			'mvn_fix_clear',
@@ -84,9 +88,12 @@ class MVN_Admin {
 				'nonce' => wp_create_nonce( MVN_NONCE_ACTION ),
 				'i18n'  => array(
 					'scanning'       => 'در حال اسکن...',
+					'paused'         => 'اسکن متوقف موقت شد',
+					'stopped'        => 'اسکن متوقف شد',
 					'done'           => 'تمام شد',
 					'error'          => 'خطا',
 					'confirm'        => 'آیا مطمئن هستید؟',
+					'confirm_stop'   => 'اسکن همین‌جا متوقف شود؟ یافته‌های فعلی ذخیره می‌مانند.',
 					'confirm_ignore' => 'این مورد به عنوان امن علامت‌گذاری شود و در اسکن‌های بعدی نادیده گرفته شود؟',
 					'fixing'         => 'در حال رفع...',
 					'repairing'      => 'در حال تعمیر...',
@@ -133,12 +140,46 @@ class MVN_Admin {
 	}
 
 	public function page_fix() {
+		$issues = MVN_Scanner::get_issues();
 		$this->render(
 			'fix',
 			array(
-				'issues' => MVN_Scanner::get_issues(),
+				'issues'       => $issues,
+				'action_counts' => MVN_Scanner::count_by_action( $issues ),
+				'export_url'   => wp_nonce_url(
+					admin_url( 'admin.php?page=mvn-fix&mvn_export=csv' ),
+					'mvn_export_issues_csv',
+					'nonce'
+				),
 			)
 		);
+	}
+
+	/**
+	 * Download open issues as CSV (fix page export).
+	 */
+	public function maybe_export_issues_csv() {
+		if ( ! isset( $_GET['page'] ) || 'mvn-fix' !== sanitize_key( wp_unslash( $_GET['page'] ) ) ) {
+			return;
+		}
+		if ( empty( $_GET['mvn_export'] ) || 'csv' !== sanitize_key( wp_unslash( $_GET['mvn_export'] ) ) ) {
+			return;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'دسترسی ندارید.', 'mvn' ), 403 );
+		}
+		check_admin_referer( 'mvn_export_issues_csv', 'nonce' );
+
+		$csv      = MVN_Scanner::issues_to_csv();
+		$filename = 'mvn-issues-' . gmdate( 'Y-m-d-His' ) . '.csv';
+
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+		header( 'Content-Length: ' . strlen( $csv ) );
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo $csv;
+		exit;
 	}
 
 	public function page_repair() {
@@ -219,6 +260,33 @@ class MVN_Admin {
 	public function ajax_scan_status() {
 		$this->guard();
 		wp_send_json_success( $this->public_scan_state( MVN_Scanner::get_state() ) );
+	}
+
+	public function ajax_scan_pause() {
+		$this->guard();
+		$state = MVN_Scanner::pause();
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_scan_state( $state ) );
+	}
+
+	public function ajax_scan_resume() {
+		$this->guard();
+		$state = MVN_Scanner::resume();
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_scan_state( $state ) );
+	}
+
+	public function ajax_scan_stop() {
+		$this->guard();
+		$state = MVN_Scanner::stop();
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_scan_state( $state ) );
 	}
 
 	private function public_scan_state( $state ) {

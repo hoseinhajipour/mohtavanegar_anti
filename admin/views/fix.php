@@ -3,6 +3,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 $count = is_array( $issues ) ? count( $issues ) : 0;
+$ac    = isset( $action_counts ) && is_array( $action_counts ) ? $action_counts : array();
+$fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 ?>
 <div class="mvn-card">
 	<h2>رفع مشکلات یافت‌شده</h2>
@@ -29,13 +31,14 @@ $count = is_array( $issues ) ? count( $issues ) : 0;
 	<?php if ( 0 === $count ) : ?>
 		<div class="mvn-empty">مشکل بازی وجود ندارد. ابتدا یک اسکن اجرا کنید.</div>
 	<?php else : ?>
-		<div class="mvn-actions" style="margin-bottom:16px">
-			<button type="button" class="button button-primary" id="mvn-fix-all" data-filter="">رفع همه (دسته‌ای)</button>
-			<button type="button" class="button" id="mvn-fix-htaccess" data-filter="delete_htaccess">حذف همه htaccess جعلی</button>
-			<button type="button" class="button" id="mvn-fix-clean" data-filter="clean">پاکسازی کدهای تزریق‌شده</button>
-			<button type="button" class="button" id="mvn-fix-uploads" data-filter="quarantine_delete">حذف PHPهای uploads</button>
-			<button type="button" class="button" id="mvn-fix-db-clean" data-filter="db_clean">پاکسازی DB</button>
-			<button type="button" class="button" id="mvn-fix-db-option" data-filter="db_delete_option">حذف option مشکوک</button>
+		<div class="mvn-actions mvn-fix-actions" style="margin-bottom:16px">
+			<button type="button" class="button button-primary mvn-fix-batch" id="mvn-fix-all" data-filter="" <?php disabled( $fixable <= 0 ); ?>>رفع همه (دسته‌ای)<?php echo $fixable > 0 ? ' (' . (int) $fixable . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-htaccess" data-filter="delete_htaccess" <?php disabled( empty( $ac['delete_htaccess'] ) ); ?>>حذف htaccess جعلی<?php echo ! empty( $ac['delete_htaccess'] ) ? ' (' . (int) $ac['delete_htaccess'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-clean" data-filter="clean" <?php disabled( empty( $ac['clean'] ) ); ?>>پاکسازی injection<?php echo ! empty( $ac['clean'] ) ? ' (' . (int) $ac['clean'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-uploads" data-filter="quarantine_delete" <?php disabled( empty( $ac['quarantine_delete'] ) ); ?>>حذف PHP uploads<?php echo ! empty( $ac['quarantine_delete'] ) ? ' (' . (int) $ac['quarantine_delete'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-clean" data-filter="db_clean" <?php disabled( empty( $ac['db_clean'] ) ); ?>>پاکسازی DB<?php echo ! empty( $ac['db_clean'] ) ? ' (' . (int) $ac['db_clean'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-option" data-filter="db_delete_option" <?php disabled( empty( $ac['db_delete_option'] ) ); ?>>حذف option مشکوک<?php echo ! empty( $ac['db_delete_option'] ) ? ' (' . (int) $ac['db_delete_option'] . ')' : ''; ?></button>
+			<a class="button" href="<?php echo esc_url( $export_url ); ?>">خروجی CSV</a>
 			<button type="button" class="button" id="mvn-fix-clear">پاک کردن لیست (اسکن مجدد)</button>
 		</div>
 		<div id="mvn-fix-progress" class="mvn-progress-wrap" style="display:none;margin-bottom:16px">

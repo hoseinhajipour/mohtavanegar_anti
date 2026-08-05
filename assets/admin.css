@@ -395,6 +395,15 @@
   font-size: 12px;
 }
 
+.mvn-scan-actions {
+  align-items: center;
+  gap: 8px;
+}
+
+#mvn-scan-stop {
+  color: #b91c1c;
+}
+
 .mvn-check-col {
   width: 36px;
   text-align: center;
