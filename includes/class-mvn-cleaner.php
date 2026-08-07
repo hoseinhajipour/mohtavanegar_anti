@@ -10,6 +10,168 @@ if ( ! defined( 'ABSPATH' ) ) {
 class MVN_Cleaner {
 
 	/**
+	 * Destructive file actions that mutate plugin files on disk.
+	 */
+	private static function destructive_actions() {
+		return array( 'quarantine_delete', 'quarantine', 'clean', 'delete_htaccess' );
+	}
+
+	/**
+	 * Active plugins that would be affected by upcoming fix operations.
+	 *
+	 * @param string      $action_filter Batch filter (empty = all fixable).
+	 * @param string|null $issue_id      Optional single issue id.
+	 * @return array[] List of {file, slug, name, count}.
+	 */
+	public static function affected_active_plugins( $action_filter = '', $issue_id = null ) {
+		if ( ! function_exists( 'get_plugins' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		$issues = MVN_Scanner::get_issues();
+		if ( $issue_id ) {
+			$issues = array_values(
+				array_filter(
+					$issues,
+					function ( $iss ) use ( $issue_id ) {
+						return isset( $iss['id'] ) && $iss['id'] === $issue_id;
+					}
+				)
+			);
+		}
+
+		$skip_actions   = array( 'core_repair', 'db_review' );
+		$destructive    = self::destructive_actions();
+		$folder_to_meta = array();
+
+		foreach ( get_plugins() as $file => $data ) {
+			$folder = dirname( $file );
+			if ( '.' === $folder ) {
+				// Single-file plugin in plugins root (e.g. hello.php).
+				$folder_to_meta[ basename( $file ) ] = array(
+					'file' => $file,
+					'name' => isset( $data['Name'] ) ? $data['Name'] : $file,
+					'single' => true,
+				);
+				continue;
+			}
+			if ( ! isset( $folder_to_meta[ $folder ] ) ) {
+				$folder_to_meta[ $folder ] = array(
+					'file'   => $file,
+					'name'   => isset( $data['Name'] ) ? $data['Name'] : $folder,
+					'single' => false,
+				);
+			}
+		}
+
+		$hits = array(); // plugin_file => meta+count
+
+		foreach ( $issues as $issue ) {
+			$action = isset( $issue['action'] ) ? $issue['action'] : '';
+			if ( $action_filter && $action !== $action_filter ) {
+				continue;
+			}
+			if ( ! $action_filter && in_array( $action, $skip_actions, true ) ) {
+				continue;
+			}
+			if ( ! in_array( $action, $destructive, true ) ) {
+				continue;
+			}
+
+			$rel = isset( $issue['rel'] ) ? str_replace( '\\', '/', $issue['rel'] ) : '';
+			if ( '' === $rel || 0 !== strpos( $rel, 'wp-content/plugins/' ) ) {
+				continue;
+			}
+			if ( mvn_is_self_plugin_path( $rel ) ) {
+				continue;
+			}
+
+			$rest = substr( $rel, strlen( 'wp-content/plugins/' ) );
+			$meta = null;
+			if ( false !== strpos( $rest, '/' ) ) {
+				$folder = strstr( $rest, '/', true );
+				if ( isset( $folder_to_meta[ $folder ] ) && empty( $folder_to_meta[ $folder ]['single'] ) ) {
+					$meta = $folder_to_meta[ $folder ];
+					$meta['slug'] = $folder;
+				}
+			} else {
+				// Single-file plugin path.
+				if ( isset( $folder_to_meta[ $rest ] ) ) {
+					$meta = $folder_to_meta[ $rest ];
+					$meta['slug'] = $rest;
+				}
+			}
+
+			if ( ! $meta || empty( $meta['file'] ) ) {
+				continue;
+			}
+			if ( ! is_plugin_active( $meta['file'] ) ) {
+				continue;
+			}
+
+			$key = $meta['file'];
+			if ( ! isset( $hits[ $key ] ) ) {
+				$hits[ $key ] = array(
+					'file'  => $meta['file'],
+					'slug'  => $meta['slug'],
+					'name'  => $meta['name'],
+					'count' => 0,
+				);
+			}
+			$hits[ $key ]['count']++;
+		}
+
+		return array_values( $hits );
+	}
+
+	/**
+	 * Deactivate a list of plugin files (never self).
+	 *
+	 * @param string[] $plugin_files Plugin basenames (e.g. akismet/akismet.php).
+	 * @return array {deactivated:string[], failed:array, skipped:string[]}
+	 */
+	public static function deactivate_plugins( $plugin_files ) {
+		if ( ! function_exists( 'deactivate_plugins' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+
+		$deactivated = array();
+		$failed      = array();
+		$skipped     = array();
+
+		foreach ( (array) $plugin_files as $file ) {
+			$file = wp_unslash( $file );
+			$file = preg_replace( '#\.+#', '.', $file );
+			$file = ltrim( str_replace( '\\', '/', (string) $file ), '/' );
+			if ( ! $file || false !== strpos( $file, '..' ) ) {
+				$failed[] = $file . ': مسیر نامعتبر';
+				continue;
+			}
+			if ( mvn_is_self_plugin_path( 'wp-content/plugins/' . dirname( $file ) . '/' ) || mvn_is_self_plugin_path( 'wp-content/plugins/' . $file ) ) {
+				$skipped[] = $file;
+				continue;
+			}
+			if ( ! is_plugin_active( $file ) ) {
+				$skipped[] = $file;
+				continue;
+			}
+			deactivate_plugins( $file, true );
+			if ( is_plugin_active( $file ) ) {
+				$failed[] = $file . ': غیرفعال‌سازی ناموفق';
+			} else {
+				$deactivated[] = $file;
+				mvn_log( 'Deactivated plugin before fix: ' . $file );
+			}
+		}
+
+		return array(
+			'deactivated' => $deactivated,
+			'failed'      => $failed,
+			'skipped'     => $skipped,
+		);
+	}
+
+	/**
 	 * Fix a single issue by its id (from last scan).
 	 *
 	 * @return true|WP_Error

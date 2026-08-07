@@ -377,25 +377,91 @@
   });
 
   /* ---------- Fix one ---------- */
+  function formatActivePluginsWarning(plugins) {
+    var lines = plugins.map(function (p) {
+      return '• ' + (p.name || p.slug) + (p.count ? ' (' + p.count + ' مورد)' : '');
+    });
+    return (
+      'این عملیات روی فایل‌های پلاگین‌های فعال زیر اثر می‌گذارد:\n\n' +
+      lines.join('\n') +
+      '\n\nآیا می‌خواهید ابتدا این پلاگین‌ها غیرفعال شوند و بعد رفع انجام شود؟\n\n' +
+      'OK = غیرفعال‌سازی سپس رفع\nCancel = بدون غیرفعال کردن / انصراف'
+    );
+  }
+
+  function maybeDeactivateThen(plugins, onContinue, onAbort) {
+    if (!plugins || !plugins.length) {
+      onContinue();
+      return;
+    }
+    var deactivate = window.confirm(formatActivePluginsWarning(plugins));
+    if (!deactivate) {
+      var proceed = window.confirm(
+        'بدون غیرفعال کردن پلاگین‌های فعال ادامه می‌دهید؟\n(ممکن است سایت یا همان پلاگین موقتاً خطا بدهد)'
+      );
+      if (!proceed) {
+        if (onAbort) onAbort();
+        return;
+      }
+      onContinue();
+      return;
+    }
+    var files = plugins.map(function (p) {
+      return p.file;
+    });
+    post('mvn_fix_deactivate', { plugins: JSON.stringify(files) })
+      .done(function (res) {
+        if (!res || !res.success) {
+          alert((res && res.data && res.data.message) || 'غیرفعال‌سازی ناموفق بود.');
+          if (onAbort) onAbort();
+          return;
+        }
+        onContinue();
+      })
+      .fail(function () {
+        alert('خطای ارتباط هنگام غیرفعال‌سازی پلاگین');
+        if (onAbort) onAbort();
+      });
+  }
+
   $(document).on('click', '.mvn-fix-one', function () {
     var $btn = $(this);
     var id = $btn.data('id');
     var $row = $btn.closest('tr');
     $btn.prop('disabled', true).text('...');
-    post('mvn_fix_one', { id: id })
-      .done(function (res) {
-        if (res && res.success) {
-          $row.fadeOut(200, function () {
-            $(this).remove();
-          });
-        } else {
-          alert((res && res.data && res.data.message) || MVN.i18n.error);
+
+    function doFixOne() {
+      post('mvn_fix_one', { id: id })
+        .done(function (res) {
+          if (res && res.success) {
+            $row.fadeOut(200, function () {
+              $(this).remove();
+            });
+          } else {
+            alert((res && res.data && res.data.message) || MVN.i18n.error);
+            $btn.prop('disabled', false).text('رفع');
+          }
+        })
+        .fail(function () {
+          alert('خطای ارتباط');
           $btn.prop('disabled', false).text('رفع');
-        }
+        });
+    }
+
+    post('mvn_fix_preview', { id: id, filter: '' })
+      .done(function (res) {
+        var plugins = (res && res.success && res.data && res.data.plugins) || [];
+        maybeDeactivateThen(plugins, doFixOne, function () {
+          $btn.prop('disabled', false).text('رفع');
+        });
       })
       .fail(function () {
-        alert('خطای ارتباط');
-        $btn.prop('disabled', false).text('رفع');
+        // If preview fails, still allow fix with a generic confirm.
+        if (!window.confirm(MVN.i18n.confirm)) {
+          $btn.prop('disabled', false).text('رفع');
+          return;
+        }
+        doFixOne();
       });
   });
 
@@ -468,17 +534,48 @@
 
   $('.mvn-fix-batch').on('click', function () {
     if ($(this).prop('disabled')) return;
-    if (!window.confirm(MVN.i18n.confirm)) return;
-    var filter = $(this).data('filter') || '';
-    var total = filter ? parseInt($(this).text().match(/\((\d+)\)/)?.[1] || '0', 10) : parseInt(
-      $('#mvn-fix-all').text().match(/\((\d+)\)/)?.[1] || $('#mvn-issues-table tbody tr').length,
-      10
-    );
+    var $btn = $(this);
+    var filter = $btn.data('filter') || '';
+    var total = filter
+      ? parseInt(($btn.text().match(/\((\d+)\)/) || [])[1] || '0', 10)
+      : parseInt(
+          ($('#mvn-fix-all').text().match(/\((\d+)\)/) || [])[1] ||
+            $('#mvn-issues-table tbody tr').length,
+          10
+        );
     if (!total) {
       total = $('#mvn-issues-table tbody tr').length;
     }
-    $('#mvn-fix-bar').css('width', '0%');
-    runFixBatch(filter, total);
+
+    setFixBatchButtonsDisabled(true);
+    post('mvn_fix_preview', { filter: filter })
+      .done(function (res) {
+        var plugins = (res && res.success && res.data && res.data.plugins) || [];
+        maybeDeactivateThen(
+          plugins,
+          function () {
+            if (!plugins.length && !window.confirm(MVN.i18n.confirm)) {
+              setFixBatchButtonsDisabled(false);
+              return;
+            }
+            if (plugins.length && !window.confirm('ادامه رفع مشکلات؟')) {
+              setFixBatchButtonsDisabled(false);
+              return;
+            }
+            $('#mvn-fix-bar').css('width', '0%');
+            runFixBatch(filter, total);
+          },
+          function () {
+            setFixBatchButtonsDisabled(false);
+          }
+        );
+      })
+      .fail(function () {
+        setFixBatchButtonsDisabled(false);
+        if (!window.confirm(MVN.i18n.confirm)) return;
+        $('#mvn-fix-bar').css('width', '0%');
+        runFixBatch(filter, total);
+      });
   });
 
   $('#mvn-fix-clear').on('click', function () {

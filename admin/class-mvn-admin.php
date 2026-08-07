@@ -35,6 +35,8 @@ class MVN_Admin {
 			'mvn_sig_pack_update',
 			'mvn_fix_one',
 			'mvn_fix_batch',
+			'mvn_fix_preview',
+			'mvn_fix_deactivate',
 			'mvn_fix_clear',
 			'mvn_fix_ignore',
 			'mvn_htaccess_restore',
@@ -424,6 +426,53 @@ class MVN_Admin {
 			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
 		}
 		wp_send_json_success( array( 'message' => 'رفع شد.', 'remaining' => count( MVN_Scanner::get_issues() ) ) );
+	}
+
+	public function ajax_fix_preview() {
+		$this->guard();
+		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
+		$id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'core_repair_file', 'delete_core_extra' );
+		if ( ! in_array( $filter, $allowed, true ) ) {
+			$filter = '';
+		}
+		$plugins = MVN_Cleaner::affected_active_plugins( $filter, $id ? $id : null );
+		wp_send_json_success(
+			array(
+				'plugins' => $plugins,
+				'count'   => count( $plugins ),
+			)
+		);
+	}
+
+	public function ajax_fix_deactivate() {
+		$this->guard();
+		$raw = isset( $_POST['plugins'] ) ? wp_unslash( $_POST['plugins'] ) : array();
+		if ( is_string( $raw ) ) {
+			$decoded = json_decode( $raw, true );
+			$raw     = is_array( $decoded ) ? $decoded : array_filter( array_map( 'trim', explode( ',', $raw ) ) );
+		}
+		$files = array();
+		foreach ( (array) $raw as $file ) {
+			$file = sanitize_text_field( $file );
+			if ( $file ) {
+				$files[] = $file;
+			}
+		}
+		if ( empty( $files ) ) {
+			wp_send_json_error( array( 'message' => 'لیست پلاگین خالی است.' ) );
+		}
+		$result = MVN_Cleaner::deactivate_plugins( $files );
+		$msg    = count( $result['deactivated'] ) . ' پلاگین غیرفعال شد.';
+		if ( ! empty( $result['failed'] ) ) {
+			$msg .= ' خطا: ' . implode( ' | ', $result['failed'] );
+		}
+		wp_send_json_success(
+			array(
+				'message' => $msg,
+				'result'  => $result,
+			)
+		);
 	}
 
 	public function ajax_fix_batch() {
