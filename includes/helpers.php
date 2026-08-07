@@ -17,7 +17,7 @@ function mvn_data_dir() {
 
 function mvn_ensure_data_dirs() {
 	$base  = mvn_data_dir();
-	$dirs  = array( $base, $base . '/quarantine', $base . '/backups', $base . '/backups/plugins', $base . '/logs', $base . '/state' );
+	$dirs  = array( $base, $base . '/quarantine', $base . '/backups', $base . '/backups/plugins', $base . '/backups/themes', $base . '/logs', $base . '/state', $base . '/signatures' );
 	$ht    = "# BEGIN Mohtavanegar\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n# END Mohtavanegar\n";
 	foreach ( $dirs as $dir ) {
 		if ( ! is_dir( $dir ) ) {
@@ -218,14 +218,24 @@ function mvn_is_skippable_dir( $rel ) {
  * Extensions the scanner treats as code / injectable content.
  */
 function mvn_scannable_extensions() {
-	return array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phps', 'pht', 'inc', 'module', 'js', 'html', 'htm', 'svg', 'txt', 'htaccess' );
+	return array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phps', 'pht', 'inc', 'module', 'js', 'html', 'htm', 'svg', 'txt', 'htaccess', 'ini', 'user.ini' );
 }
 
 /**
- * Binary/archive extensions never scanned.
+ * Image / media extensions peeked for embedded PHP (polyglot) under uploads.
+ */
+function mvn_media_peek_extensions() {
+	return apply_filters(
+		'mvn_media_peek_extensions',
+		array( 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'svg', 'tif', 'tiff' )
+	);
+}
+
+/**
+ * Binary/archive extensions never scanned (except media peek under uploads).
  */
 function mvn_binary_extensions() {
-	return array( 'zip', 'gz', 'tar', 'rar', '7z', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'mp4', 'mp3', 'avi', 'mov', 'pdf', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'exe', 'dll', 'so', 'psd', 'ai', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'sql' );
+	return array( 'zip', 'gz', 'tar', 'rar', '7z', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'ico', 'mp4', 'mp3', 'avi', 'mov', 'pdf', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'exe', 'dll', 'so', 'psd', 'ai', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'sql' );
 }
 
 /**

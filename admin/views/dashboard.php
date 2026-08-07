@@ -135,6 +135,16 @@ $ring_off  = $ring_c * ( 1 - ( $cl_pct / 100 ) );
 		<h2>وضعیت منابع تعمیر</h2>
 		<ul class="mvn-kv">
 			<li>
+				<span>بسته امضا</span>
+				<b class="mvn-ok">
+					<?php
+					$sp = isset( $sig_pack ) && is_array( $sig_pack ) ? $sig_pack : array();
+					echo 'v' . esc_html( isset( $sp['version'] ) ? $sp['version'] : '?' );
+					echo ' — ' . (int) ( isset( $sp['sig_count'] ) ? $sp['sig_count'] : 0 ) . ' امضا اضافه';
+					?>
+				</b>
+			</li>
+			<li>
 				<span>wordpress_core.zip</span>
 				<b class="<?php echo ! empty( $core['zip_ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
 					<?php

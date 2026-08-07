@@ -1,0 +1,72 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-07",
+  "min_plugin": "1.6.0",
+  "signatures": [
+    {
+      "id": "assert_string_call",
+      "label": "فراخوانی assert از رشته ساخته‌شده (obfuscation)",
+      "severity": "critical",
+      "pattern": "/\\$\\w+\\s*=\\s*['\"]assert['\"]\\s*;[\\s\\S]{0,80}?\\$\\w+\\s*\\(/i",
+      "scope": "php",
+      "clean": "none"
+    },
+    {
+      "id": "goto_obfuscation",
+      "label": "goto اسپگتی (الگوی مبهم‌سازی مدرن)",
+      "severity": "warning",
+      "pattern": "/\\bgoto\\s+[A-Za-z_]\\w*\\s*;[\\s\\S]{0,200}?\\bgoto\\s+[A-Za-z_]\\w*\\s*;/i",
+      "scope": "php",
+      "clean": "none"
+    },
+    {
+      "id": "php_filter_include",
+      "label": "include با php://filter (استخراج/اجرای کد)",
+      "severity": "critical",
+      "pattern": "/\\b(?:include|require)(?:_once)?\\s*\\(?\\s*['\"]php:\\/\\/filter\\//i",
+      "scope": "php",
+      "clean": "statement"
+    },
+    {
+      "id": "array_map_request",
+      "label": "array_map/array_walk روی ورودی کاربر (وب‌شل)",
+      "severity": "critical",
+      "pattern": "/\\b(?:array_map|array_walk|array_filter|usort|uasort)\\s*\\(\\s*['\"](?:assert|system|passthru|shell_exec|exec)['\"]\\s*,\\s*\\$_(?:GET|POST|REQUEST)/i",
+      "scope": "php",
+      "clean": "none"
+    },
+    {
+      "id": "svg_script_payload",
+      "label": "SVG با اسکریپت / event handler مخرب",
+      "severity": "warning",
+      "pattern": "/<(?:script|foreignObject)[\\s>]|\\bon(?:load|error|click)\\s*=/i",
+      "scope": "svg",
+      "clean": "none"
+    },
+    {
+      "id": "ini_auto_prepend",
+      "label": "auto_prepend/append در .user.ini یا php.ini",
+      "severity": "critical",
+      "pattern": "/^\\s*(?:auto_prepend_file|auto_append_file)\\s*=/im",
+      "scope": "ini",
+      "clean": "none"
+    },
+    {
+      "id": "mailer_bot_markers",
+      "label": "نشانه‌های میلر/اسپم‌بات",
+      "severity": "warning",
+      "pattern": "/\\b(?:mail\\s*\\(\\s*\\$_(?:POST|GET|REQUEST)|PHPMailer.*SMTP.*\\$_(?:POST|GET)|leafmailer|XMailer\\s*:\\s*PHP)/i",
+      "scope": "php",
+      "clean": "none"
+    },
+    {
+      "id": "wp_cdn_hijack",
+      "label": "تزریق CDN/اسکریپت خارجی در هسته قالب/پلاگین",
+      "severity": "warning",
+      "pattern": "/wp_enqueue_script\\s*\\([^;]*(?:cdn\\.jsdelivr|unpkg\\.com|cdnjs)[^;]*\\$_(?:GET|POST|REQUEST)/i",
+      "scope": "php",
+      "clean": "none"
+    }
+  ],
+  "hashes": []
+}

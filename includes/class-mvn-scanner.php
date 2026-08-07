@@ -24,6 +24,8 @@ class MVN_Scanner {
 		$full        = ! empty( $opts['full'] );
 		$scan_db     = ! isset( $opts['scan_db'] ) || ! empty( $opts['scan_db'] );
 		$scan_core   = ! isset( $opts['scan_core'] ) || ! empty( $opts['scan_core'] );
+		$scan_repo   = ! isset( $opts['scan_repo'] ) || ! empty( $opts['scan_repo'] );
+		$scan_media  = ! isset( $opts['scan_media'] ) || ! empty( $opts['scan_media'] );
 		if ( 'wp-content' === $scope ) {
 			$scan_core = false;
 		}
@@ -53,20 +55,28 @@ class MVN_Scanner {
 
 		// Always include every .htaccess under ABSPATH (rogue-htaccess hunt).
 		$files = array_merge( $files, self::find_all_htaccess() );
+		// Drop-ins, MU-plugins, .user.ini
+		$files = array_merge( $files, MVN_Dropin_Audit::extra_scan_paths() );
 		$files = array_values( array_unique( $files ) );
 
 		// Filter by extension / size.
-		$scannable = mvn_scannable_extensions();
-		$binary    = mvn_binary_extensions();
-		$filtered  = array();
+		$scannable  = mvn_scannable_extensions();
+		$binary     = mvn_binary_extensions();
+		$media_peek = mvn_media_peek_extensions();
+		$filtered   = array();
 		foreach ( $files as $rel ) {
 			if ( mvn_is_skippable_dir( dirname( $rel ) ) ) {
 				continue;
 			}
 			$ext = strtolower( pathinfo( $rel, PATHINFO_EXTENSION ) );
-			// Bare .htaccess has empty extension.
+			// Bare .htaccess / .user.ini have empty or special names.
 			$name = basename( $rel );
-			if ( '.htaccess' === $name || 'htaccess' === $name ) {
+			if ( '.htaccess' === $name || 'htaccess' === $name || '.user.ini' === $name || 'user.ini' === $name || 'php.ini' === $name ) {
+				$filtered[] = $rel;
+				continue;
+			}
+			// Polyglot peek: images under uploads (optional but on by default).
+			if ( $scan_media && in_array( $ext, $media_peek, true ) && 0 === strpos( $rel, 'wp-content/uploads/' ) ) {
 				$filtered[] = $rel;
 				continue;
 			}
@@ -118,6 +128,8 @@ class MVN_Scanner {
 			'incremental' => $incremental ? 1 : 0,
 			'scan_db'     => $scan_db ? 1 : 0,
 			'scan_core'   => $scan_core ? 1 : 0,
+			'scan_repo'   => $scan_repo ? 1 : 0,
+			'scan_media'  => $scan_media ? 1 : 0,
 			'phase'       => 'files',
 			'catalog'     => count( $filtered ),
 			'skipped_unchanged' => $skipped_unchanged,
@@ -137,8 +149,15 @@ class MVN_Scanner {
 				'js'       => 0,
 				'db'       => 0,
 				'core'     => 0,
+				'repo'     => 0,
+				'dropin'   => 0,
+				'polyglot' => 0,
+				'hash'     => 0,
 			),
 		);
+		mvn_state_write( self::STATE_KEY, $state );
+		// Structural drop-in audit once at start.
+		MVN_Dropin_Audit::audit( $state );
 		mvn_state_write( self::STATE_KEY, $state );
 		update_option( MVN_OPTION_LASTSCAN, array( 'id' => $state['id'], 'started_at' => $state['started_at'] ), false );
 		mvn_log( 'Scan started: ' . $state['id'] . ' catalog=' . count( $filtered ) . ' to_scan=' . $state['total'] . ' skipped=' . $skipped_unchanged );
@@ -163,6 +182,20 @@ class MVN_Scanner {
 				$state['core_files']  = array();
 				$state['core_extras'] = array();
 				self::after_core_phase( $state );
+			} else {
+				self::commit_tick_state( $state );
+			}
+			return $state;
+		}
+
+		if ( 'repo' === $phase ) {
+			MVN_Repo_Integrity::tick( $state );
+			$state['updated_at'] = gmdate( 'c' );
+			if ( MVN_Repo_Integrity::is_done( $state ) ) {
+				$state['repo_jobs']       = array();
+				$state['repo_file_queue'] = array();
+				$state['repo_context']    = null;
+				self::after_repo_phase( $state );
 			} else {
 				self::commit_tick_state( $state );
 			}
@@ -249,9 +282,25 @@ class MVN_Scanner {
 	}
 
 	/**
-	 * Core checksum phase finished — move to DB or finalize.
+	 * Core checksum phase finished — move to repo integrity, DB, or finalize.
 	 */
 	private static function after_core_phase( &$state ) {
+		if ( ! empty( $state['scan_repo'] ) ) {
+			MVN_Repo_Integrity::begin_phase( $state );
+			if ( MVN_Repo_Integrity::is_done( $state ) ) {
+				self::after_repo_phase( $state );
+			} else {
+				mvn_state_write( self::STATE_KEY, $state );
+			}
+			return;
+		}
+		self::after_repo_phase( $state );
+	}
+
+	/**
+	 * Repo integrity finished — move to DB or finalize.
+	 */
+	private static function after_repo_phase( &$state ) {
 		if ( ! empty( $state['scan_db'] ) ) {
 			MVN_DB_Scanner::begin_phase( $state );
 			mvn_state_write( self::STATE_KEY, $state );
@@ -360,6 +409,7 @@ class MVN_Scanner {
 				'incremental'       => ! empty( $state['incremental'] ),
 				'scan_db'           => ! empty( $state['scan_db'] ),
 				'scan_core'         => ! empty( $state['scan_core'] ),
+				'scan_repo'         => ! empty( $state['scan_repo'] ),
 				'stats'             => isset( $state['stats'] ) ? $state['stats'] : array(),
 				'issue_count'       => count( $issues ),
 			),
@@ -387,7 +437,11 @@ class MVN_Scanner {
 			return;
 		}
 		$size = @filesize( $abs );
-		if ( false === $size || $size > 5 * 1024 * 1024 ) {
+		// Media polyglot: allow up to 8MB peek; other files stay at 5MB.
+		$is_media_peek = in_array( strtolower( pathinfo( $rel, PATHINFO_EXTENSION ) ), mvn_media_peek_extensions(), true )
+			&& 0 === strpos( $rel, 'wp-content/uploads/' );
+		$max_size = $is_media_peek ? 8 * 1024 * 1024 : 5 * 1024 * 1024;
+		if ( false === $size || $size > $max_size ) {
 			return;
 		}
 		$mtime = @filemtime( $abs );
@@ -407,8 +461,57 @@ class MVN_Scanner {
 		$name = basename( $rel );
 		$ext  = strtolower( pathinfo( $rel, PATHINFO_EXTENSION ) );
 		$is_htaccess = ( '.htaccess' === $name || 'htaccess' === $name );
+		$is_ini      = ( '.user.ini' === $name || 'user.ini' === $name || 'php.ini' === $name || 'ini' === $ext );
 		$is_php      = in_array( $ext, array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'inc' ), true );
 		$is_js       = ( 'js' === $ext );
+		$is_svg      = ( 'svg' === $ext );
+
+		// Known malware hash match (pack).
+		$hash_hit = MVN_Signature_Pack::match_hash( $content );
+		if ( $hash_hit ) {
+			if ( self::add_finding(
+				$state,
+				array(
+					'rel'      => $rel,
+					'sig'      => 'known_malware_hash',
+					'label'    => $hash_hit['label'],
+					'severity' => $hash_hit['severity'],
+					'detail'   => strtoupper( $hash_hit['algo'] ) . ' ' . $hash_hit['hash'],
+					'action'   => 'quarantine_delete',
+					'snippet'  => self::snippet( $content, 0, 120 ),
+				),
+				$content,
+				$file_hash
+			) ) {
+				$had_issues = true;
+				$state['stats']['critical']++;
+				$state['stats']['hash']++;
+			}
+		}
+
+		// Polyglot: PHP/webshell markers inside media under uploads.
+		if ( $is_media_peek && self::content_has_php_payload( $content ) ) {
+			if ( self::add_finding(
+				$state,
+				array(
+					'rel'      => $rel,
+					'sig'      => 'polyglot_php_in_media',
+					'label'    => 'کد PHP جاسازی‌شده در فایل رسانه (polyglot)',
+					'severity' => 'critical',
+					'detail'   => 'تصویر/مدیا حاوی تگ یا payload اجرایی PHP است.',
+					'action'   => 'quarantine_delete',
+					'snippet'  => self::snippet( $content, max( 0, self::php_payload_offset( $content ) ), 180 ),
+				),
+				$content,
+				$file_hash
+			) ) {
+				$had_issues = true;
+				$state['stats']['critical']++;
+				$state['stats']['polyglot']++;
+			}
+			MVN_File_Index::mark( $rel, ! $had_issues, $mtime, $size );
+			return; // Skip noisy full regex on binary media.
+		}
 
 		// Rogue htaccess: any .htaccess that is NOT the site root one is suspicious
 		// if it contains PHP-handler / auto_prepend / RewriteEngine+payload.
@@ -474,7 +577,7 @@ class MVN_Scanner {
 			}
 		}
 
-		$scope_key = $is_htaccess ? 'htaccess' : ( $is_php ? 'php' : ( $is_js ? 'js' : 'any' ) );
+		$scope_key = $is_htaccess ? 'htaccess' : ( $is_php ? 'php' : ( $is_js ? 'js' : ( $is_svg ? 'svg' : ( $is_ini ? 'ini' : 'any' ) ) ) );
 
 		foreach ( $sigs as $sig ) {
 			$sig_scope = $sig['scope'];
@@ -486,6 +589,12 @@ class MVN_Scanner {
 					continue;
 				}
 				if ( 'htaccess' === $sig_scope && ! $is_htaccess ) {
+					continue;
+				}
+				if ( 'svg' === $sig_scope && ! $is_svg ) {
+					continue;
+				}
+				if ( 'ini' === $sig_scope && ! $is_ini ) {
 					continue;
 				}
 			}
@@ -553,6 +662,31 @@ class MVN_Scanner {
 		}
 
 		MVN_File_Index::mark( $rel, ! $had_issues, $mtime, $size );
+	}
+
+	/**
+	 * Detect PHP / webshell markers inside binary/media content.
+	 */
+	private static function content_has_php_payload( $content ) {
+		if ( false !== stripos( $content, '<?php' ) || false !== strpos( $content, '<?=' ) ) {
+			return true;
+		}
+		if ( preg_match( '/\b(?:eval|assert|shell_exec|passthru|system|base64_decode)\s*\(/i', $content ) ) {
+			return true;
+		}
+		if ( preg_match( '/\$_(?:GET|POST|REQUEST|COOKIE)\s*\[/i', $content ) && preg_match( '/\b(?:eval|assert|system|exec|passthru|shell_exec)\b/i', $content ) ) {
+			return true;
+		}
+		return false;
+	}
+
+	private static function php_payload_offset( $content ) {
+		$pos = stripos( $content, '<?php' );
+		if ( false !== $pos ) {
+			return (int) $pos;
+		}
+		$pos = strpos( $content, '<?=' );
+		return false !== $pos ? (int) $pos : 0;
 	}
 
 	private static function add_issue( &$state, $issue, $content = '', $file_hash = '' ) {
@@ -766,6 +900,8 @@ class MVN_Scanner {
 			'db_clean'           => 0,
 			'db_delete_option'   => 0,
 			'core_repair'        => 0,
+			'core_repair_file'   => 0,
+			'delete_core_extra'  => 0,
 			'db_review'          => 0,
 		);
 		if ( ! is_array( $issues ) ) {

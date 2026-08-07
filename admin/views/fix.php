@@ -16,16 +16,16 @@ $fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 		یافته‌ها بر اساس <strong>امتیاز اطمینان</strong> مرتب شده‌اند. برای موارد اشتباه (false positive) از دکمه «امن است» استفاده کنید تا در اسکن‌های بعدی نادیده گرفته شوند.
 	</p>
 	<p class="mvn-muted">
-		<strong>یافته‌های هسته (checksum)</strong> — فایل‌های <code>wp-admin</code> / <code>wp-includes</code> که MD5 آن‌ها با نسخه رسمی وردپرس مطابقت ندارد.
-		برای رفع از <a href="<?php echo esc_url( admin_url( 'admin.php?page=mvn-repair' ) ); ?>">تعمیر هسته → جایگزینی از zip</a> استفاده کنید، نه دکمه «رفع».
+		<strong>یافته‌های هسته (checksum)</strong> —
+		فایل‌های <em>تغییر یافته / گم‌شده</em> را می‌توانید با دکمه «رفع» یا «تعمیر فایل هسته» از zip بازگردانید؛
+		فایل‌های <em>اضافی</em> بعد از قرنطینه حذف می‌شوند.
+		برای جایگزینی کامل از <a href="<?php echo esc_url( admin_url( 'admin.php?page=mvn-repair' ) ); ?>">تعمیر هسته</a> استفاده کنید.
 	</p>
 	<p class="mvn-muted">
 		<strong>یافته‌های دیتابیس</strong> (شروع با <code>db:</code>) ممکن است نیاز به بررسی دستی داشته باشند — مخصوصاً کاربران ادمین مشکوک. optionهای محافظت‌شده وردپرس هرگز خودکار حذف نمی‌شوند.
 	</p>
 	<p class="mvn-muted">
-		<strong>فایل‌های هسته وردپرس</strong> (<code>wp-admin</code>، <code>wp-includes</code>، <code>wp-settings.php</code> و …) در اسکن بررسی نمی‌شوند —
-		اگر آلوده بودند از <a href="<?php echo esc_url( admin_url( 'admin.php?page=mvn-repair' ) ); ?>">تعمیر هسته → جایگزینی از wordpress_core.zip</a> استفاده کنید.
-		<strong>هرگز</strong> روی فایل‌های هسته دکمه «رفع» نزنید.
+		عمل <code>quarantine</code> اکنون فایل را <strong>ایزوله</strong> می‌کند (کپی به قرنطینه + حذف از مسیر اصلی)، نه فقط کپی.
 	</p>
 
 	<?php if ( 0 === $count ) : ?>
@@ -36,6 +36,8 @@ $fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-htaccess" data-filter="delete_htaccess" <?php disabled( empty( $ac['delete_htaccess'] ) ); ?>>حذف htaccess جعلی<?php echo ! empty( $ac['delete_htaccess'] ) ? ' (' . (int) $ac['delete_htaccess'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-clean" data-filter="clean" <?php disabled( empty( $ac['clean'] ) ); ?>>پاکسازی injection<?php echo ! empty( $ac['clean'] ) ? ' (' . (int) $ac['clean'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-uploads" data-filter="quarantine_delete" <?php disabled( empty( $ac['quarantine_delete'] ) ); ?>>حذف PHP uploads<?php echo ! empty( $ac['quarantine_delete'] ) ? ' (' . (int) $ac['quarantine_delete'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-core-file" data-filter="core_repair_file" <?php disabled( empty( $ac['core_repair_file'] ) ); ?>>تعمیر فایل هسته<?php echo ! empty( $ac['core_repair_file'] ) ? ' (' . (int) $ac['core_repair_file'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-core-extra" data-filter="delete_core_extra" <?php disabled( empty( $ac['delete_core_extra'] ) ); ?>>حذف فایل اضافی هسته<?php echo ! empty( $ac['delete_core_extra'] ) ? ' (' . (int) $ac['delete_core_extra'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-clean" data-filter="db_clean" <?php disabled( empty( $ac['db_clean'] ) ); ?>>پاکسازی DB<?php echo ! empty( $ac['db_clean'] ) ? ' (' . (int) $ac['db_clean'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-option" data-filter="db_delete_option" <?php disabled( empty( $ac['db_delete_option'] ) ); ?>>حذف option مشکوک<?php echo ! empty( $ac['db_delete_option'] ) ? ' (' . (int) $ac['db_delete_option'] . ')' : ''; ?></button>
 			<a class="button" href="<?php echo esc_url( $export_url ); ?>">خروجی CSV</a>

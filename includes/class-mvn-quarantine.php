@@ -28,6 +28,30 @@ class MVN_Quarantine {
 	}
 
 	/**
+	 * Isolate malware: quarantine copy then remove the live file (move semantics).
+	 *
+	 * @param string $rel  Relative path.
+	 * @param array  $meta Extra metadata.
+	 * @return string|WP_Error Quarantine id on success.
+	 */
+	public static function isolate( $rel, $meta = array() ) {
+		$abs = mvn_abs_path( $rel );
+		if ( ! $abs || ! is_file( $abs ) ) {
+			return true; // already gone
+		}
+		$meta['isolated'] = 1;
+		$id = self::store( $rel, $meta );
+		if ( ! $id ) {
+			return new WP_Error( 'quarantine_fail', 'قرنطینه قبل از ایزوله کردن ناموفق بود.' );
+		}
+		if ( ! @unlink( $abs ) ) {
+			return new WP_Error( 'unlink_fail', 'فایل قرنطینه شد ولی حذف از مسیر اصلی ناموفق بود (سطح دسترسی؟).' );
+		}
+		mvn_log( "Isolated (moved to quarantine): {$rel} -> {$id}" );
+		return $id;
+	}
+
+	/**
 	 * Store arbitrary text/binary payload (e.g. DB row backup).
 	 *
 	 * @param string $rel     Logical path label.

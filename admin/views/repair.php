@@ -54,22 +54,53 @@ if ( ! defined( 'ABSPATH' ) ) {
 		<ul class="mvn-kv">
 			<li>
 				<span>وضعیت آرشیو</span>
-				<b class="<?php echo ! empty( $core['zip_ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<b id="mvn-core-zip-status" class="<?php echo ! empty( $core['zip_ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
 					<?php
 					if ( empty( $core['exists'] ) ) {
 						echo 'فایل zip موجود نیست';
 					} elseif ( empty( $core['zip_ok'] ) ) {
 						echo 'آرشیو باز نمی‌شود';
 					} else {
-						echo 'آماده — ' . (int) $core['files'] . ' ورودی / ' . esc_html( mvn_size_format( $core['size'] ) );
+						$label = 'آماده — ' . (int) $core['files'] . ' ورودی / ' . esc_html( mvn_size_format( $core['size'] ) );
+						if ( ! empty( $core['version'] ) ) {
+							$label .= ' / نسخه ' . esc_html( $core['version'] );
+						}
+						echo $label;
 					}
 					?>
 				</b>
 			</li>
+			<?php if ( ! empty( $core['downloaded_at'] ) ) : ?>
+			<li>
+				<span>آخرین دریافت از wordpress.org</span>
+				<b id="mvn-core-zip-fetched"><?php
+					$ts = strtotime( $core['downloaded_at'] );
+					echo esc_html( $ts ? gmdate( 'Y/m/d H:i', $ts ) . ' UTC' : $core['downloaded_at'] );
+				?></b>
+			</li>
+			<?php else : ?>
+			<li>
+				<span>آخرین دریافت از wordpress.org</span>
+				<b id="mvn-core-zip-fetched" class="mvn-muted">هنوز دریافت نشده (نسخه همراه پلاگین)</b>
+			</li>
+			<?php endif; ?>
 		</ul>
-		<button type="button" class="button button-primary button-hero" id="mvn-core-start" <?php disabled( empty( $core['zip_ok'] ) ); ?>>
-			شروع جایگزینی هسته
-		</button>
+		<div class="mvn-actions" style="margin-top:12px">
+			<button type="button" class="button" id="mvn-core-download" <?php disabled( empty( $core['writable'] ) ); ?>>
+				دریافت آخرین نسخه وردپرس
+			</button>
+			<button type="button" class="button" id="mvn-core-selective" <?php disabled( empty( $core['zip_ok'] ) ); ?>>
+				تعمیر انتخابی (فقط آسیب‌دیده‌ها)
+			</button>
+			<button type="button" class="button button-primary button-hero" id="mvn-core-start" <?php disabled( empty( $core['zip_ok'] ) ); ?>>
+				شروع جایگزینی کامل هسته
+			</button>
+		</div>
+		<p class="mvn-muted" style="margin-top:8px">
+			«تعمیر انتخابی» فقط فایل‌های تغییر یافته/گم‌شدهٔ گزارش‌شده در آخرین اسکن را از zip بازمی‌گرداند.
+			جایگزینی کامل همهٔ هسته را بازنویسی می‌کند.
+		</p>
+		<div id="mvn-core-download-result" style="margin-top:10px"></div>
 		<div id="mvn-core-progress" class="mvn-progress-wrap" style="display:none;margin-top:16px">
 			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-core-bar" style="width:0%"></div></div>
 			<div class="mvn-progress-meta">
@@ -101,6 +132,35 @@ if ( ! defined( 'ABSPATH' ) ) {
 		</ul>
 		<button type="button" class="button button-primary" id="mvn-ht-restore">بازیابی htaccess ریشه</button>
 		<div id="mvn-ht-restore-result" style="margin-top:10px"></div>
+	</div>
+
+	<div class="mvn-card">
+		<h2>قفل PHP در uploads</h2>
+		<p>
+			یک <code>.htaccess</code> امن داخل <code>wp-content/uploads</code> می‌نویسد تا اجرای
+			<code>.php / .phtml / .phar</code> در پوشه آپلود غیرفعال شود (جلوگیری از webshell).
+		</p>
+		<?php
+		$uploads_ht = isset( $uploads_ht ) && is_array( $uploads_ht ) ? $uploads_ht : array();
+		?>
+		<ul class="mvn-kv">
+			<li>
+				<span>وضعیت</span>
+				<b id="mvn-uploads-ht-status" class="<?php echo ! empty( $uploads_ht['hardened'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+					<?php
+					if ( empty( $uploads_ht['exists'] ) ) {
+						echo 'htaccess ندارد';
+					} elseif ( ! empty( $uploads_ht['hardened'] ) ) {
+						echo 'محافظت فعال (deny PHP)';
+					} else {
+						echo 'وجود دارد ولی محافظت کامل نیست';
+					}
+					?>
+				</b>
+			</li>
+		</ul>
+		<button type="button" class="button button-primary" id="mvn-uploads-harden">اعمال deny-PHP روی uploads</button>
+		<div id="mvn-uploads-harden-result" style="margin-top:10px"></div>
 	</div>
 </div>
 
@@ -200,4 +260,62 @@ if ( ! defined( 'ABSPATH' ) ) {
 		توجه: فقط پلاگین‌های رایگان wordpress.org پشتیبانی می‌شوند. پلاگین‌های پریمیوم یا خارج از مخزن باید دستی جایگزین شوند.
 		برای افزودن پلاگین به لیست از فیلتر <code>mvn_repo_plugins</code> در functions.php استفاده کنید.
 	</p>
+</div>
+
+<div class="mvn-card" style="margin-top:16px">
+	<h2>تعمیر قالب‌های مخزن وردپرس</h2>
+	<p>
+		قالب‌های نصب‌شده را از <code>themes.wordpress.org</code> دوباره می‌گیرد و جایگزین می‌کند.
+		قبل از جایگزینی، نسخه فعلی در <code>wp-content/mvn-data/backups/themes/</code> پشتیبان می‌شود.
+		قالب‌های پریمیوم/خارج از مخزن قابل دانلود نیستند.
+	</p>
+
+	<div id="mvn-theme-progress" class="mvn-progress-wrap" style="display:none;margin-bottom:16px">
+		<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-theme-bar" style="width:0%"></div></div>
+		<div class="mvn-progress-meta">
+			<span id="mvn-theme-label">...</span>
+			<span id="mvn-theme-pct">0%</span>
+		</div>
+	</div>
+	<div id="mvn-theme-result" style="margin-bottom:16px"></div>
+
+	<table class="widefat striped mvn-table" id="mvn-themes-table">
+		<thead>
+			<tr>
+				<th>قالب</th>
+				<th>slug</th>
+				<th>وضعیت</th>
+				<th>نسخه</th>
+				<th>فایل‌ها</th>
+				<th></th>
+			</tr>
+		</thead>
+		<tbody>
+		<?php
+		$themes = isset( $themes ) && is_array( $themes ) ? $themes : array();
+		foreach ( $themes as $th ) :
+			?>
+			<tr data-slug="<?php echo esc_attr( $th['slug'] ); ?>">
+				<td><strong><?php echo esc_html( $th['name'] ); ?></strong></td>
+				<td><code><?php echo esc_html( $th['slug'] ); ?></code></td>
+				<td>
+					<?php if ( ! empty( $th['active'] ) ) : ?>
+						<span class="mvn-badge mvn-badge-warning">فعال</span>
+					<?php else : ?>
+						<span class="mvn-badge mvn-badge-info">نصب‌شده</span>
+					<?php endif; ?>
+				</td>
+				<td><?php echo $th['version'] ? esc_html( $th['version'] ) : '—'; ?></td>
+				<td><?php echo (int) $th['file_count']; ?></td>
+				<td>
+					<button type="button" class="button button-small button-primary mvn-theme-repair"
+						data-slug="<?php echo esc_attr( $th['slug'] ); ?>"
+						data-name="<?php echo esc_attr( $th['name'] ); ?>">
+						جایگزینی از مخزن
+					</button>
+				</td>
+			</tr>
+		<?php endforeach; ?>
+		</tbody>
+	</table>
 </div>

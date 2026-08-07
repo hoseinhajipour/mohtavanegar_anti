@@ -128,9 +128,10 @@ class MVN_Cleaner {
 			return new WP_Error( 'bad_path', 'مسیر نامعتبر.' );
 		}
 
-		// Never touch core, this plugin, or wp-config.php via cleaner.
-		if ( mvn_is_core_path( $rel ) ) {
-			return new WP_Error( 'protected', 'فایل‌های هسته وردپرس از اینجا ویرایش نمی‌شوند — از «تعمیر هسته → جایگزینی از zip» استفاده کنید.' );
+		// Core extras may be deleted; selective core restore handled below.
+		$is_core = mvn_is_core_path( $rel );
+		if ( $is_core && ! in_array( $action, array( 'delete_core_extra', 'core_repair_file' ), true ) ) {
+			return new WP_Error( 'protected', 'فایل‌های هسته وردپرس از اینجا ویرایش نمی‌شوند — از «تعمیر هسته» استفاده کنید.' );
 		}
 		if ( mvn_is_self_plugin_path( $rel ) ) {
 			return new WP_Error( 'protected', 'فایل‌های خود پلاگین آنتی‌ویروس قابل ویرایش از این مسیر نیستند.' );
@@ -144,17 +145,30 @@ class MVN_Cleaner {
 				return self::delete_file( $rel, $abs, 'rogue_htaccess' );
 
 			case 'quarantine_delete':
+			case 'delete_core_extra':
+				if ( $is_core && 'delete_core_extra' === $action ) {
+					// Only extras (not official core paths that appear in allowlist as real files).
+					// Extras are files under wp-admin/wp-includes that are NOT in checksum map —
+					// still under "core path" prefix, so allow delete here.
+					return self::delete_file( $rel, $abs, isset( $issue['sig'] ) ? $issue['sig'] : 'core_extra' );
+				}
 				return self::delete_file( $rel, $abs, isset( $issue['sig'] ) ? $issue['sig'] : 'malware' );
 
+			case 'core_repair_file':
+				return MVN_Core_Repair::repair_one( $rel );
+
 			case 'quarantine':
-				if ( ! is_file( $abs ) ) {
-					return true; // already gone
+				// Isolate = move to quarantine (remove live copy).
+				$result = MVN_Quarantine::isolate(
+					$rel,
+					array(
+						'reason' => isset( $issue['sig'] ) ? $issue['sig'] : 'malware',
+						'issue'  => $issue,
+					)
+				);
+				if ( is_wp_error( $result ) ) {
+					return $result;
 				}
-				$id = MVN_Quarantine::store( $rel, array( 'reason' => isset( $issue['sig'] ) ? $issue['sig'] : 'malware', 'issue' => $issue ) );
-				if ( ! $id ) {
-					return new WP_Error( 'quarantine_fail', 'قرنطینه ناموفق بود.' );
-				}
-				mvn_log( "Quarantined (kept on disk): {$rel}" );
 				return true;
 
 			case 'clean':
@@ -222,13 +236,19 @@ class MVN_Cleaner {
 		$cleaned = preg_replace( '/\x3c\x3fphp\s*\x3f\x3e\s*/', '', $cleaned );
 
 		if ( 0 === $hits || $cleaned === $original ) {
-			// Could not auto-clean — quarantine the whole file instead.
-			$id = MVN_Quarantine::store( $rel, array( 'reason' => 'uncleanable:' . ( isset( $issue['sig'] ) ? $issue['sig'] : 'unknown' ), 'issue' => $issue ) );
-			if ( ! $id ) {
-				return new WP_Error( 'uncleanable', 'کد تزریقی قابل حذف خودکار نبود — قرنطینه هم ناموفق بود.' );
+			// Could not auto-clean — isolate (quarantine + remove live file).
+			$result = MVN_Quarantine::isolate(
+				$rel,
+				array(
+					'reason' => 'uncleanable:' . ( isset( $issue['sig'] ) ? $issue['sig'] : 'unknown' ),
+					'issue'  => $issue,
+				)
+			);
+			if ( is_wp_error( $result ) ) {
+				return new WP_Error( 'uncleanable', 'کد تزریقی قابل حذف خودکار نبود — ایزوله هم ناموفق: ' . $result->get_error_message() );
 			}
-			mvn_log( "Could not auto-clean {$rel}; quarantined as {$id}" );
-			return new WP_Error( 'uncleanable', 'کد قابل حذف خودکار نبود؛ فایل قرنطینه شد. بررسی دستی توصیه می‌شود.' );
+			mvn_log( "Could not auto-clean {$rel}; isolated as {$result}" );
+			return new WP_Error( 'uncleanable', 'کد قابل حذف خودکار نبود؛ فایل ایزوله (قرنطینه+حذف) شد. بررسی دستی توصیه می‌شود.' );
 		}
 
 		// Backup then write.

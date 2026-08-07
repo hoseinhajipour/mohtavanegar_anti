@@ -3,7 +3,7 @@
  * Plugin Name:       Mohtavanegar Antivirus
  * Plugin URI:        https://mohtavanegar.local/
  * Description:       آنتی‌ویروس وردپرس: اسکن بدافزار، حذف کدهای تزریق‌شده، تعمیر فایل‌های هسته از سورس سالم، بازیابی htaccess، حذف htaccess های جعلی، سخت‌سازی امنیتی (Brute Force، XMLRPC، سطح دسترسی‌ها).
- * Version:           1.5.6
+ * Version:           1.7.0
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            Mohtavanegar Security
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MVN_VERSION', '1.5.6' );
+define( 'MVN_VERSION', '1.7.0' );
 define( 'MVN_PLUGIN_FILE', __FILE__ );
 define( 'MVN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MVN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -25,8 +25,13 @@ define( 'MVN_OPTION_ISSUES', 'mvn_scan_issues' );
 define( 'MVN_OPTION_HARDENING', 'mvn_hardening' );
 define( 'MVN_OPTION_LASTSCAN', 'mvn_last_scan' );
 define( 'MVN_NONCE_ACTION', 'mvn_ajax_nonce' );
+// Optional remote signature pack URL (filterable via mvn_signature_pack_url).
+if ( ! defined( 'MVN_SIGNATURE_PACK_URL' ) ) {
+	define( 'MVN_SIGNATURE_PACK_URL', '' );
+}
 
 require_once MVN_PLUGIN_DIR . 'includes/helpers.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-signature-pack.php';
 require_once MVN_PLUGIN_DIR . 'includes/signatures.php';
 require_once MVN_PLUGIN_DIR . 'includes/confidence.php';
 require_once MVN_PLUGIN_DIR . 'includes/signatures-db.php';
@@ -34,6 +39,8 @@ require_once MVN_PLUGIN_DIR . 'includes/class-mvn-file-index.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-ignore-list.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-db-scanner.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-core-integrity.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-dropin-audit.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-repo-integrity.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-quarantine.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-scanner.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-cleaner.php';
@@ -41,6 +48,7 @@ require_once MVN_PLUGIN_DIR . 'includes/class-mvn-htaccess-guard.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-core-repair.php';
 require_once MVN_PLUGIN_DIR . 'includes/repo-plugins.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-plugin-repair.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-theme-repair.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-permissions.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-hardening.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-perf.php';
@@ -53,6 +61,7 @@ function mvn_activate() {
 	if ( false === get_option( MVN_OPTION_HARDENING ) ) {
 		add_option( MVN_OPTION_HARDENING, MVN_Hardening::defaults() );
 	}
+	MVN_Signature_Pack::install_from_bundled();
 }
 
 function mvn_deactivate() {

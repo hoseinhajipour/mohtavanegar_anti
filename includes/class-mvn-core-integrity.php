@@ -290,11 +290,9 @@ class MVN_Core_Integrity {
 			if ( empty( $stat['name'] ) ) {
 				continue;
 			}
-			$name = str_replace( '\\', '/', $stat['name'] );
-			if ( 0 === strpos( $name, 'wordpress_core/' ) ) {
-				$name = substr( $name, strlen( 'wordpress_core/' ) );
-			}
-			$name = ltrim( $name, '/' );
+			$name = class_exists( 'MVN_Core_Repair' )
+				? MVN_Core_Repair::strip_zip_root( $stat['name'] )
+				: ltrim( str_replace( '\\', '/', $stat['name'] ), '/' );
 			if ( '' === $name || '/' === substr( $name, -1 ) ) {
 				continue;
 			}
@@ -480,6 +478,14 @@ class MVN_Core_Integrity {
 		$source_label = isset( $checksums['source'] ) ? $checksums['source'] : 'unknown';
 		$version      = isset( $checksums['version'] ) ? $checksums['version'] : '';
 
+		// Extras → quarantine+delete; modified/missing → selective zip restore.
+		$action = 'core_repair_file';
+		if ( 'core_checksum_extra' === $sig ) {
+			$action = 'delete_core_extra';
+		} elseif ( 'core_checksum_unavailable' === $sig ) {
+			$action = 'core_repair';
+		}
+
 		$added = MVN_Scanner::add_finding(
 			$state,
 			array(
@@ -489,7 +495,7 @@ class MVN_Core_Integrity {
 				'label'         => $label,
 				'severity'      => $severity,
 				'detail'        => $detail . ( $version ? ' [WP ' . $version . ', src: ' . $source_label . ']' : '' ),
-				'action'        => 'core_repair',
+				'action'        => $action,
 				'clean'         => 'none',
 				'snippet'       => $snippet,
 				'expected_hash' => $expected,

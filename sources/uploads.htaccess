@@ -1,0 +1,13 @@
+# BEGIN Mohtavanegar Uploads Deny PHP
+<IfModule mod_authz_core.c>
+	<FilesMatch "\.(?i:php|phtml|php3|php4|php5|php7|php8|phar|cgi|pl|shtml)$">
+		Require all denied
+	</FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+	<FilesMatch "\.(?i:php|phtml|php3|php4|php5|php7|php8|phar|cgi|pl|shtml)$">
+		Order Allow,Deny
+		Deny from all
+	</FilesMatch>
+</IfModule>
+# END Mohtavanegar Uploads Deny PHP

@@ -133,4 +133,91 @@ class MVN_Htaccess_Guard {
 
 		return compact( 'deleted', 'skipped', 'errors' );
 	}
+
+	/**
+	 * Install / refresh deny-PHP .htaccess inside wp-content/uploads.
+	 *
+	 * @return array|WP_Error {path, created, updated, matched}
+	 */
+	public static function harden_uploads() {
+		$uploads = wp_upload_dir();
+		if ( ! empty( $uploads['error'] ) ) {
+			return new WP_Error( 'uploads', 'مسیر uploads در دسترس نیست: ' . $uploads['error'] );
+		}
+		$dir = isset( $uploads['basedir'] ) ? $uploads['basedir'] : '';
+		if ( ! $dir || ! is_dir( $dir ) ) {
+			return new WP_Error( 'no_dir', 'پوشه uploads پیدا نشد.' );
+		}
+		if ( ! is_writable( $dir ) ) {
+			return new WP_Error( 'not_writable', 'پوشه uploads قابل نوشتن نیست.' );
+		}
+
+		$src = MVN_PLUGIN_DIR . 'sources/uploads.htaccess';
+		if ( ! is_file( $src ) ) {
+			return new WP_Error( 'no_source', 'فایل sources/uploads.htaccess همراه پلاگین یافت نشد.' );
+		}
+		$content = @file_get_contents( $src );
+		if ( false === $content || '' === trim( $content ) ) {
+			return new WP_Error( 'empty', 'منبع htaccess آپلود خالی است.' );
+		}
+
+		$dest = rtrim( $dir, '/\\' ) . DIRECTORY_SEPARATOR . '.htaccess';
+		$exists = is_file( $dest );
+		$matched = false;
+
+		if ( $exists ) {
+			$current = (string) @file_get_contents( $dest );
+			$matched = ( false !== strpos( $current, 'BEGIN Mohtavanegar Uploads Deny PHP' ) );
+			if ( $matched && md5( $current ) === md5( $content ) ) {
+				return array(
+					'path'    => mvn_rel_path( $dest ),
+					'created' => false,
+					'updated' => false,
+					'matched' => true,
+				);
+			}
+			MVN_Quarantine::store( mvn_rel_path( $dest ), array( 'reason' => 'uploads-htaccess-backup' ) );
+		}
+
+		$ok = @file_put_contents( $dest, $content );
+		if ( false === $ok ) {
+			return new WP_Error( 'write_fail', 'نوشتن .htaccess در uploads ناموفق بود.' );
+		}
+		@chmod( $dest, 0644 );
+		mvn_log( 'Uploads .htaccess hardened (deny PHP).' );
+
+		return array(
+			'path'    => mvn_rel_path( $dest ),
+			'created' => ! $exists,
+			'updated' => $exists,
+			'matched' => false,
+		);
+	}
+
+	/**
+	 * Status of uploads deny-PHP htaccess.
+	 */
+	public static function uploads_status() {
+		$uploads = wp_upload_dir();
+		$out     = array(
+			'exists'  => false,
+			'hardened'=> false,
+			'path'    => '',
+		);
+		if ( ! empty( $uploads['error'] ) || empty( $uploads['basedir'] ) ) {
+			return $out;
+		}
+		$dest = rtrim( $uploads['basedir'], '/\\' ) . DIRECTORY_SEPARATOR . '.htaccess';
+		$out['path']   = mvn_rel_path( $dest );
+		$out['exists'] = is_file( $dest );
+		if ( $out['exists'] ) {
+			$current = (string) @file_get_contents( $dest );
+			$out['hardened'] = (
+				false !== strpos( $current, 'BEGIN Mohtavanegar Uploads Deny PHP' )
+				|| ( preg_match( '/<(?:Files|FilesMatch)[^>]*>[\s\S]*?(?:Require all denied|Deny from all)/i', $current )
+					&& preg_match( '/php|phtml|phar/i', $current ) )
+			);
+		}
+		return $out;
+	}
 }

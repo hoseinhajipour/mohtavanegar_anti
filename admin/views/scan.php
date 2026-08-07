@@ -7,7 +7,40 @@ $is_active   = in_array( $scan_status, array( 'running', 'paused' ), true );
 ?>
 <div class="mvn-card">
 	<h2>اسکن بدافزار</h2>
-	<p>اسکنر فایل‌های PHP / JS / HTML، تمام <code>.htaccess</code> ها، و در صورت فعال بودن، <strong>دیتابیس</strong> (options، posts، users) را برای بدافزار پنهان بررسی می‌کند.</p>
+	<p>
+		اسکنر فایل‌های PHP / JS / HTML، رسانه‌های uploads (پلی‌گلوت)، <code>.htaccess</code>،
+		<code>.user.ini</code>، drop-inها، و در صورت فعال بودن checksum هسته / پلاگین‌قالب مخزن و دیتابیس را بررسی می‌کند.
+	</p>
+
+	<?php
+	$sig_pack = isset( $sig_pack ) && is_array( $sig_pack ) ? $sig_pack : array();
+	?>
+	<div class="mvn-card" style="margin:0 0 16px;background:#f8fafc">
+		<h3 style="margin-top:0">بسته امضا (Signature Pack)</h3>
+		<ul class="mvn-kv">
+			<li>
+				<span>نسخه فعال</span>
+				<b><?php echo esc_html( isset( $sig_pack['version'] ) ? $sig_pack['version'] : '—' ); ?></b>
+			</li>
+			<li>
+				<span>منبع</span>
+				<b><?php echo esc_html( isset( $sig_pack['source'] ) ? $sig_pack['source'] : '—' ); ?></b>
+			</li>
+			<li>
+				<span>امضاهای اضافه / هش</span>
+				<b><?php echo (int) ( isset( $sig_pack['sig_count'] ) ? $sig_pack['sig_count'] : 0 ); ?> / <?php echo (int) ( isset( $sig_pack['hash_count'] ) ? $sig_pack['hash_count'] : 0 ); ?></b>
+			</li>
+		</ul>
+		<div class="mvn-actions">
+			<button type="button" class="button" id="mvn-sig-pack-update">
+				<?php echo ! empty( $sig_pack['has_remote'] ) ? 'دریافت به‌روزرسانی امضا' : 'همگام‌سازی با بسته همراه پلاگین'; ?>
+			</button>
+		</div>
+		<p class="mvn-muted" style="margin-top:8px">
+			برای آپدیت آنلاین، ثابت <code>MVN_SIGNATURE_PACK_URL</code> یا فیلتر <code>mvn_signature_pack_url</code> را تنظیم کنید.
+		</p>
+		<div id="mvn-sig-pack-result" style="margin-top:8px"></div>
+	</div>
 
 	<div class="mvn-form-row">
 		<label>محدوده اسکن</label>
@@ -22,6 +55,12 @@ $is_active   = in_array( $scan_status, array( 'running', 'paused' ), true );
 	</div>
 	<div class="mvn-form-row">
 		<label><input type="checkbox" id="mvn-scan-core" value="1" checked <?php disabled( $is_active ); ?>> بررسی checksum هسته (MD5 رسمی wordpress.org)</label>
+	</div>
+	<div class="mvn-form-row">
+		<label><input type="checkbox" id="mvn-scan-repo" value="1" checked <?php disabled( $is_active ); ?>> بررسی checksum پلاگین/قالب مخزن wordpress.org</label>
+	</div>
+	<div class="mvn-form-row">
+		<label><input type="checkbox" id="mvn-scan-media" value="1" checked <?php disabled( $is_active ); ?>> اسکن پلی‌گلوت رسانه در uploads (PHP داخل jpg/gif/ico/...)</label>
 	</div>
 	<div class="mvn-form-row">
 		<label><input type="checkbox" id="mvn-scan-db" value="1" checked <?php disabled( $is_active ); ?>> اسکن دیتابیس (options / posts / users — کشف بدافزار پنهان)</label>

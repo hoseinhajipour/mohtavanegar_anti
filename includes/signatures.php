@@ -16,6 +16,27 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function mvn_signatures() {
+	$builtin = mvn_builtin_signatures();
+	$by_id   = array();
+	foreach ( $builtin as $sig ) {
+		if ( ! empty( $sig['id'] ) ) {
+			$by_id[ $sig['id'] ] = $sig;
+		}
+	}
+	if ( class_exists( 'MVN_Signature_Pack' ) ) {
+		foreach ( MVN_Signature_Pack::extra_signatures() as $sig ) {
+			if ( ! empty( $sig['id'] ) ) {
+				$by_id[ $sig['id'] ] = $sig;
+			}
+		}
+	}
+	return apply_filters( 'mvn_signatures', array_values( $by_id ) );
+}
+
+/**
+ * Built-in malware signatures shipped with the plugin.
+ */
+function mvn_builtin_signatures() {
 	return array(
 
 		// ---------- Execution / obfuscation (PHP) ----------
@@ -254,6 +275,8 @@ function mvn_clean_rules() {
 		'/[ \t]*(?<!\->)\$\$?[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)[^;]*\)\s*;/i' => "\n",
 		// include with hex-obfuscated path
 		'/[ \t]*@?\b(?:include|require)(?:_once)?\s*\(?\s*["\'](?:\\\\x[0-9a-f]{2}){4,}[^"\']*["\']\s*\)?\s*;/i' => "\n",
+		// include php://filter
+		'/[ \t]*@?\b(?:include|require)(?:_once)?\s*\(?\s*[\'"]php:\/\/filter\/[^\'"]*[\'"]\s*\)?\s*;/i' => "\n",
 		// preg_replace with /e modifier executing request data
 		'/[ \t]*\bpreg_replace\s*\(\s*[\'"][^\'"]*\/[a-z]*e[a-z]*[\'"]\s*,\s*\$_(?:GET|POST|REQUEST|COOKIE)[^;]*\)\s*;/i' => "\n",
 		// JS: document.write(unescape(...));

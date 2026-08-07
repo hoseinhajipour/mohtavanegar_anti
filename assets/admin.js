@@ -5,15 +5,17 @@
     return;
   }
 
-  function post(action, data) {
+  function post(action, data, opts) {
     data = data || {};
     data.action = action;
     data.nonce = MVN.nonce;
+    opts = opts || {};
     return $.ajax({
       url: MVN.ajax,
       method: 'POST',
       dataType: 'json',
       data: data,
+      timeout: opts.timeout || 0,
     });
   }
 
@@ -52,6 +54,15 @@
     if (s.stats && s.stats.core) {
       parts.push('Core: ' + s.stats.core);
     }
+    if (s.stats && s.stats.repo) {
+      parts.push('Repo: ' + s.stats.repo);
+    }
+    if (s.stats && s.stats.polyglot) {
+      parts.push('Polyglot: ' + s.stats.polyglot);
+    }
+    if (s.stats && s.stats.dropin) {
+      parts.push('Drop-in: ' + s.stats.dropin);
+    }
     return parts.join(' | ');
   }
 
@@ -59,6 +70,9 @@
     if (s.phase === 'core') {
       var extra = s.core_version ? ' (WP ' + s.core_version + ')' : '';
       return 'checksum هسته' + extra;
+    }
+    if (s.phase === 'repo') {
+      return 'checksum مخزن' + (s.repo_label ? ' — ' + s.repo_label : '');
     }
     if (s.phase === 'db') {
       return 'دیتابیس — ' + (s.db_phase_label || s.db_phase || '...');
@@ -82,7 +96,7 @@
     var paused = status === 'paused';
     var active = running || paused;
     $('#mvn-scan-start').prop('disabled', active);
-    $('#mvn-scan-scope, #mvn-scan-deep, #mvn-scan-core, #mvn-scan-db, #mvn-scan-incremental, #mvn-scan-full').prop('disabled', active);
+    $('#mvn-scan-scope, #mvn-scan-deep, #mvn-scan-core, #mvn-scan-repo, #mvn-scan-media, #mvn-scan-db, #mvn-scan-incremental, #mvn-scan-full').prop('disabled', active);
     $('#mvn-scan-pause').toggle(running);
     $('#mvn-scan-resume').toggle(paused);
     $('#mvn-scan-stop').toggle(active);
@@ -196,6 +210,29 @@
     }
   });
 
+  $('#mvn-sig-pack-update').on('click', function () {
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('در حال به‌روزرسانی...');
+    $('#mvn-sig-pack-result').empty();
+    post('mvn_sig_pack_update')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-sig-pack-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+        } else {
+          notice($('#mvn-sig-pack-result'), (res.data && res.data.message) || 'بسته امضا به‌روز شد.', true);
+        }
+        $btn.prop('disabled', false).text(
+          (res && res.data && res.data.sig_pack && res.data.sig_pack.has_remote)
+            ? 'دریافت به‌روزرسانی امضا'
+            : 'همگام‌سازی با بسته همراه پلاگین'
+        );
+      })
+      .fail(function () {
+        notice($('#mvn-sig-pack-result'), 'خطای ارتباط', false);
+        $btn.prop('disabled', false);
+      });
+  });
+
   $('#mvn-scan-incremental').on('change', function () {
     if ($(this).is(':checked')) {
       $('#mvn-scan-full').prop('checked', false);
@@ -219,6 +256,8 @@
       full: full ? 1 : 0,
       scan_db: $('#mvn-scan-db').is(':checked') ? 1 : 0,
       scan_core: $('#mvn-scan-core').is(':checked') ? 1 : 0,
+      scan_repo: $('#mvn-scan-repo').is(':checked') ? 1 : 0,
+      scan_media: $('#mvn-scan-media').is(':checked') ? 1 : 0,
     })
       .done(function (res) {
         if (!res || !res.success) {
@@ -524,6 +563,61 @@
   });
 
   /* ---------- Core repair ---------- */
+  function formatCoreZipStatus(core) {
+    if (!core || !core.exists) return 'فایل zip موجود نیست';
+    if (!core.zip_ok) return 'آرشیو باز نمی‌شود';
+    var label = 'آماده — ' + (core.files || 0) + ' ورودی';
+    if (core.size) {
+      var mb = (core.size / (1024 * 1024)).toFixed(1);
+      label += ' / ' + mb + ' MB';
+    }
+    if (core.version) label += ' / نسخه ' + core.version;
+    return label;
+  }
+
+  function applyCoreZipStatus(core) {
+    if (!core) return;
+    var $st = $('#mvn-core-zip-status');
+    $st.text(formatCoreZipStatus(core));
+    $st.toggleClass('mvn-ok', !!core.zip_ok).toggleClass('mvn-bad', !core.zip_ok);
+    $('#mvn-core-start').prop('disabled', !core.zip_ok);
+    if (core.downloaded_at) {
+      var d = new Date(core.downloaded_at);
+      var txt = isNaN(d.getTime())
+        ? core.downloaded_at
+        : d.toLocaleString('fa-IR');
+      $('#mvn-core-zip-fetched').removeClass('mvn-muted').text(txt);
+    }
+  }
+
+  $('#mvn-core-download').on('click', function () {
+    if (!window.confirm('آخرین نسخه وردپرس از wordpress.org دانلود و جایگزین wordpress_core.zip می‌شود. ادامه؟')) {
+      return;
+    }
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('در حال دریافت...');
+    $('#mvn-core-start').prop('disabled', true);
+    $('#mvn-core-download-result').empty();
+    notice($('#mvn-core-download-result'), 'در حال دانلود از wordpress.org — ممکن است چند دقیقه طول بکشد…', true);
+    post('mvn_core_download', {}, { timeout: 600000 })
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-core-download-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $btn.prop('disabled', false).text('دریافت آخرین نسخه وردپرس');
+          $('#mvn-core-start').prop('disabled', !$('#mvn-core-zip-status').hasClass('mvn-ok'));
+          return;
+        }
+        notice($('#mvn-core-download-result'), (res.data && res.data.message) || 'دانلود موفق بود.', true);
+        applyCoreZipStatus(res.data && res.data.core);
+        $btn.prop('disabled', false).text('دریافت آخرین نسخه وردپرس');
+      })
+      .fail(function () {
+        notice($('#mvn-core-download-result'), 'خطای ارتباط — دانلود ممکن است به‌خاطر حجم یا timeout قطع شده باشد.', false);
+        $btn.prop('disabled', false).text('دریافت آخرین نسخه وردپرس');
+        $('#mvn-core-start').prop('disabled', !$('#mvn-core-zip-status').hasClass('mvn-ok'));
+      });
+  });
+
   function runCoreLoop() {
     post('mvn_core_tick')
       .done(function (res) {
@@ -548,37 +642,47 @@
           } else {
             notice($('#mvn-core-result'), msg, true);
           }
-          $('#mvn-core-start').prop('disabled', false);
+          $('#mvn-core-start, #mvn-core-selective').prop('disabled', false);
         } else {
           notice($('#mvn-core-result'), 'خطا در تعمیر', false);
-          $('#mvn-core-start').prop('disabled', false);
+          $('#mvn-core-start, #mvn-core-selective').prop('disabled', false);
         }
       })
       .fail(function () {
         notice($('#mvn-core-result'), 'خطای ارتباط', false);
-        $('#mvn-core-start').prop('disabled', false);
+        $('#mvn-core-start, #mvn-core-selective').prop('disabled', false);
       });
   }
 
-  $('#mvn-core-start').on('click', function () {
-    if (!window.confirm('فایل‌های هسته وردپرس از zip جایگزین می‌شوند. ادامه؟')) return;
-    var $btn = $(this);
-    $btn.prop('disabled', true);
+  function startCoreRepair(action, confirmMsg) {
+    if (!window.confirm(confirmMsg)) return;
+    $('#mvn-core-start, #mvn-core-selective').prop('disabled', true);
     $('#mvn-core-progress').show();
     $('#mvn-core-result').empty();
-    post('mvn_core_start')
+    post(action)
       .done(function (res) {
         if (!res || !res.success) {
           notice($('#mvn-core-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
-          $btn.prop('disabled', false);
+          $('#mvn-core-start, #mvn-core-selective').prop('disabled', false);
           return;
         }
         setTimeout(runCoreLoop, 50);
       })
       .fail(function () {
         notice($('#mvn-core-result'), 'خطای ارتباط', false);
-        $btn.prop('disabled', false);
+        $('#mvn-core-start, #mvn-core-selective').prop('disabled', false);
       });
+  }
+
+  $('#mvn-core-start').on('click', function () {
+    startCoreRepair('mvn_core_start', 'فایل‌های هسته وردپرس از zip جایگزین می‌شوند. ادامه؟');
+  });
+
+  $('#mvn-core-selective').on('click', function () {
+    startCoreRepair(
+      'mvn_core_selective',
+      'فقط فایل‌های تغییر یافته/گم‌شدهٔ آخرین اسکن از zip تعمیر می‌شوند. ادامه؟'
+    );
   });
 
   /* ---------- Plugin repair (WordPress.org) ---------- */
@@ -656,6 +760,70 @@
       });
   });
 
+  /* ---------- Theme repair (WordPress.org) ---------- */
+  function runThemeLoop() {
+    post('mvn_theme_tick')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-theme-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('.mvn-theme-repair').prop('disabled', false);
+          return;
+        }
+        var s = res.data;
+        var p = pct(s.cursor, s.total);
+        $('#mvn-theme-bar').css('width', p + '%');
+        $('#mvn-theme-pct').text(p + '%');
+        $('#mvn-theme-label').text(
+          (s.name || s.slug) + ' — نوشته‌شده: ' + s.written + ' | ' + s.cursor + '/' + s.total
+        );
+        if (s.status === 'running') {
+          setTimeout(runThemeLoop, 80);
+        } else if (s.status === 'done') {
+          var msg = 'تعمیر قالب «' + (s.name || s.slug) + '» تمام شد. نوشته‌شده: ' + s.written;
+          if (s.skipped) msg += ' | ردشده: ' + s.skipped;
+          if (s.errors && s.errors.length) {
+            msg += ' — خطاها: ' + s.errors.join(' | ');
+            notice($('#mvn-theme-result'), msg, false);
+          } else {
+            notice($('#mvn-theme-result'), msg, true);
+          }
+          $('.mvn-theme-repair').prop('disabled', false);
+          setTimeout(function () { window.location.reload(); }, 1200);
+        } else {
+          notice($('#mvn-theme-result'), 'خطا در تعمیر قالب', false);
+          $('.mvn-theme-repair').prop('disabled', false);
+        }
+      })
+      .fail(function () {
+        notice($('#mvn-theme-result'), 'خطای ارتباط', false);
+        $('.mvn-theme-repair').prop('disabled', false);
+      });
+  }
+
+  $(document).on('click', '.mvn-theme-repair', function () {
+    var slug = $(this).data('slug');
+    var name = $(this).data('name') || slug;
+    if (!window.confirm('قالب «' + name + '» از wordpress.org جایگزین شود؟')) return;
+    $('.mvn-theme-repair').prop('disabled', true);
+    $('#mvn-theme-progress').show();
+    $('#mvn-theme-result').empty();
+    $('#mvn-theme-bar').css('width', '0%');
+    $('#mvn-theme-label').text('در حال دانلود قالب از wordpress.org...');
+    post('mvn_theme_start', { slug: slug })
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-theme-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('.mvn-theme-repair').prop('disabled', false);
+          return;
+        }
+        setTimeout(runThemeLoop, 50);
+      })
+      .fail(function () {
+        notice($('#mvn-theme-result'), 'خطای ارتباط (دانلود ممکن است طول بکشد)', false);
+        $('.mvn-theme-repair').prop('disabled', false);
+      });
+  });
+
   /* ---------- Permissions ---------- */
   function runPermsLoop() {
     post('mvn_perms_tick')
@@ -713,6 +881,34 @@
           notice($('#mvn-ht-restore-result'), res.data.message, true);
         } else {
           notice($('#mvn-ht-restore-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+        }
+      })
+      .always(function () {
+        $btn.prop('disabled', false);
+      });
+  });
+
+  $('#mvn-uploads-harden').on('click', function () {
+    if (!window.confirm('deny-PHP روی پوشه uploads اعمال شود؟')) return;
+    var $btn = $(this);
+    $btn.prop('disabled', true);
+    post('mvn_uploads_harden')
+      .done(function (res) {
+        if (res && res.success) {
+          notice($('#mvn-uploads-harden-result'), res.data.message, true);
+          if (res.data.status) {
+            var st = res.data.status;
+            var $el = $('#mvn-uploads-ht-status');
+            if (st.hardened) {
+              $el.text('محافظت فعال (deny PHP)').removeClass('mvn-bad').addClass('mvn-ok');
+            } else if (!st.exists) {
+              $el.text('htaccess ندارد').removeClass('mvn-ok').addClass('mvn-bad');
+            } else {
+              $el.text('وجود دارد ولی محافظت کامل نیست').removeClass('mvn-ok').addClass('mvn-bad');
+            }
+          }
+        } else {
+          notice($('#mvn-uploads-harden-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
         }
       })
       .always(function () {
