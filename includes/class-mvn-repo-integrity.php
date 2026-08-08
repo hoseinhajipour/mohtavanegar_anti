@@ -175,7 +175,7 @@ class MVN_Repo_Integrity {
 					'repo_checksum_missing',
 					'فایل مخزن گم‌شده: ' . $ctx['name'],
 					'critical',
-					'quarantine',
+					'repo_repair',
 					$ctx
 				);
 				continue;
@@ -193,7 +193,7 @@ class MVN_Repo_Integrity {
 					'repo_checksum_modified',
 					'فایل تغییر یافته نسبت به wordpress.org: ' . $ctx['name'],
 					'critical',
-					'quarantine',
+					'repo_repair',
 					$ctx
 				);
 			}

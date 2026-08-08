@@ -17,6 +17,165 @@ class MVN_Cleaner {
 	}
 
 	/**
+	 * Actions that are safe to auto-fix without risking a white-screen.
+	 * (Deletes only extras/uploads PHP, restores core files, strips DB spam.)
+	 */
+	public static function safe_actions() {
+		return apply_filters(
+			'mvn_safe_fix_actions',
+			array(
+				'quarantine_delete',
+				'delete_core_extra',
+				'core_repair_file',
+				'db_clean',
+				'db_delete_option',
+				'delete_htaccess',
+				'as_delete',
+			)
+		);
+	}
+
+	/**
+	 * Actions that must never run in batch "safe" mode (can break WP/plugins/themes).
+	 */
+	public static function risky_actions() {
+		return apply_filters(
+			'mvn_risky_fix_actions',
+			array(
+				'clean',       // may isolate whole file if pattern not stripped
+				'quarantine',  // isolates (deletes) live file
+				'repo_repair', // needs plugin/theme reinstall UI
+				'db_review',
+				'core_repair',
+				'manual_review',
+			)
+		);
+	}
+
+	/**
+	 * Classify remediation risk for an issue: safe | caution | manual.
+	 *
+	 * @param array $issue Issue row.
+	 * @return string
+	 */
+	public static function risk_tier( $issue ) {
+		$action = isset( $issue['action'] ) ? $issue['action'] : '';
+		$sig    = isset( $issue['sig'] ) ? $issue['sig'] : '';
+		$rel    = isset( $issue['rel'] ) ? str_replace( '\\', '/', (string) $issue['rel'] ) : '';
+
+		// Known FPs are safe to dismiss (no site mutation).
+		if ( self::issue_is_known_false_positive( $issue ) ) {
+			return 'safe';
+		}
+
+		// Remap legacy/misclassified actions.
+		$action = self::normalized_action( $issue );
+
+		if ( in_array( $action, array( 'db_review', 'core_repair', 'repo_repair', 'manual_review' ), true ) ) {
+			return 'manual';
+		}
+
+		// Whole-file isolate of theme/plugin bootstrap is never "safe".
+		if ( in_array( $action, array( 'quarantine', 'clean' ), true ) && self::is_protected_live_path( $rel ) ) {
+			return 'manual';
+		}
+
+		// Low-confidence heuristics that often FP inside vendor plugins.
+		if ( in_array( $sig, array( 'hidden_iframe', 'variable_variables_eval', 'long_base64_blob', 'svg_script_payload' ), true ) ) {
+			return 'manual';
+		}
+
+		if ( in_array( $action, self::safe_actions(), true ) ) {
+			return 'safe';
+		}
+
+		if ( in_array( $action, self::risky_actions(), true ) ) {
+			return 'caution';
+		}
+
+		return 'caution';
+	}
+
+	/**
+	 * Normalize action for safety (e.g. missing repo file → repair, not quarantine).
+	 *
+	 * @param array $issue Issue row.
+	 * @return string
+	 */
+	public static function normalized_action( $issue ) {
+		$action = isset( $issue['action'] ) ? $issue['action'] : '';
+		$sig    = isset( $issue['sig'] ) ? $issue['sig'] : '';
+
+		if ( in_array( $sig, array( 'repo_checksum_missing', 'repo_checksum_modified' ), true ) ) {
+			return 'repo_repair';
+		}
+		if ( in_array( $sig, array( 'long_base64_blob', 'svg_script_payload' ), true ) && in_array( $action, array( 'quarantine', 'clean' ), true ) ) {
+			return 'manual_review';
+		}
+		return $action;
+	}
+
+	/**
+	 * Paths that must not be deleted/isolated — breaking them whitescreens the site.
+	 *
+	 * @param string $rel Relative path from ABSPATH.
+	 * @return bool
+	 */
+	public static function is_protected_live_path( $rel ) {
+		$rel = str_replace( '\\', '/', (string) $rel );
+		$rel = ltrim( $rel, '/' );
+
+		if ( '' === $rel || 'wp-config.php' === $rel ) {
+			return true;
+		}
+		if ( mvn_is_self_plugin_path( $rel ) ) {
+			return true;
+		}
+
+		// Active / parent / child theme critical files.
+		if ( preg_match( '#^wp-content/themes/[^/]+/(functions\.php|style\.css|index\.php|header\.php|footer\.php)$#', $rel ) ) {
+			return true;
+		}
+
+		// Any plugin main bootstrap (folder/plugin.php) — prefer review over isolate.
+		if ( 0 === strpos( $rel, 'wp-content/plugins/' ) ) {
+			$rest = substr( $rel, strlen( 'wp-content/plugins/' ) );
+			// Single-file plugin in plugins root.
+			if ( false === strpos( $rest, '/' ) && preg_match( '/\.php$/i', $rest ) ) {
+				return true;
+			}
+			// Common entry points.
+			if ( preg_match( '#^[^/]+/([^/]+)\.php$#', $rest, $m ) ) {
+				$folder = strstr( $rest, '/', true );
+				if ( $folder && 0 === strcasecmp( $folder, $m[1] ) ) {
+					return true;
+				}
+			}
+		}
+
+		return (bool) apply_filters( 'mvn_is_protected_live_path', false, $rel );
+	}
+
+	/**
+	 * Human label for risk tier (admin UI).
+	 */
+	public static function risk_label( $tier ) {
+		$labels = array(
+			'safe'    => 'امن',
+			'caution' => 'احتیاط',
+			'manual'  => 'دستی',
+		);
+		return isset( $labels[ $tier ] ) ? $labels[ $tier ] : $tier;
+	}
+
+	/**
+	 * Whether this issue may run in "رفع امن" batch.
+	 */
+	public static function is_safe_auto_fix( $issue ) {
+		return 'safe' === self::risk_tier( $issue );
+	}
+
+	/**
 	 * Active plugins that would be affected by upcoming fix operations.
 	 *
 	 * @param string      $action_filter Batch filter (empty = all fixable).
@@ -40,7 +199,7 @@ class MVN_Cleaner {
 			);
 		}
 
-		$skip_actions   = array( 'core_repair', 'db_review' );
+		$skip_actions   = array( 'core_repair', 'db_review', 'repo_repair', 'manual_review' );
 		$destructive    = self::destructive_actions();
 		$folder_to_meta = array();
 
@@ -68,13 +227,22 @@ class MVN_Cleaner {
 
 		foreach ( $issues as $issue ) {
 			$action = isset( $issue['action'] ) ? $issue['action'] : '';
-			if ( $action_filter && $action !== $action_filter ) {
+			// Safe batch never mutates plugin files; empty filter without a single id = safe mode.
+			if ( 'safe' === $action_filter || ( '' === $action_filter && ! $issue_id ) ) {
 				continue;
 			}
-			if ( ! $action_filter && in_array( $action, $skip_actions, true ) ) {
+			if ( $action_filter && 'all' !== $action_filter && $action !== $action_filter ) {
+				continue;
+			}
+			if ( ( ! $action_filter || 'all' === $action_filter ) && in_array( $action, $skip_actions, true ) ) {
 				continue;
 			}
 			if ( ! in_array( $action, $destructive, true ) ) {
+				continue;
+			}
+			// Never suggest deactivating for protected bootstrap if we will refuse the fix anyway.
+			$rel_check = isset( $issue['rel'] ) ? str_replace( '\\', '/', $issue['rel'] ) : '';
+			if ( $rel_check && self::is_protected_live_path( $rel_check ) ) {
 				continue;
 			}
 
@@ -218,38 +386,60 @@ class MVN_Cleaner {
 	}
 
 	/**
-	 * Fix every issue of a given action type, or all.
+	 * Fix every issue of a given action type, or safe/all modes.
 	 *
-	 * @param string $action_filter '' | clean | delete_htaccess | quarantine_delete | quarantine
+	 * @param string $action_filter '' | safe | all | clean | delete_htaccess | …
 	 * @param int    $limit Max items per call (for AJAX chunking).
 	 * @return array {fixed:int, failed:int, remaining:int, errors:[]}
 	 */
-	public static function fix_batch( $action_filter = '', $limit = 15 ) {
+	public static function fix_batch( $action_filter = 'safe', $limit = 15 ) {
 		$issues = MVN_Scanner::get_issues();
 		$fixed  = 0;
 		$failed = 0;
 		$skipped = 0;
 		$errors = array();
 		$kept   = array();
-		$skip_actions = array( 'core_repair', 'db_review' );
+
+		// Default batch is safe-only so "رفع همه" cannot whitescreen WP.
+		if ( '' === $action_filter || 'safe' === $action_filter ) {
+			$mode = 'safe';
+		} elseif ( 'all' === $action_filter ) {
+			$mode = 'all';
+		} else {
+			$mode = 'filter';
+		}
+
+		$skip_actions = array( 'core_repair', 'db_review', 'repo_repair', 'manual_review' );
 
 		foreach ( $issues as $issue ) {
-			$action = isset( $issue['action'] ) ? $issue['action'] : '';
+			$action = self::normalized_action( $issue );
+			// Keep original action on the issue for apply(); inject normalized when needed.
+			$issue['_action_norm'] = $action;
 
 			if ( $fixed + $failed >= $limit ) {
 				$kept[] = $issue;
 				continue;
 			}
 
-			if ( $action_filter && ( empty( $action ) || $action !== $action_filter ) ) {
-				$kept[] = $issue;
-				continue;
-			}
-
-			if ( ! $action_filter && in_array( $action, $skip_actions, true ) ) {
-				$kept[] = $issue;
-				$skipped++;
-				continue;
+			if ( 'safe' === $mode ) {
+				if ( ! self::is_safe_auto_fix( $issue ) ) {
+					$kept[] = $issue;
+					$skipped++;
+					continue;
+				}
+			} elseif ( 'filter' === $mode ) {
+				$raw_action = isset( $issue['action'] ) ? $issue['action'] : '';
+				if ( $action !== $action_filter && $raw_action !== $action_filter ) {
+					$kept[] = $issue;
+					continue;
+				}
+			} else {
+				// mode = all: still skip pure-manual actions.
+				if ( in_array( $action, $skip_actions, true ) ) {
+					$kept[] = $issue;
+					$skipped++;
+					continue;
+				}
 			}
 
 			$r = self::apply( $issue );
@@ -269,6 +459,7 @@ class MVN_Cleaner {
 			'skipped'   => $skipped,
 			'remaining' => count( $kept ),
 			'errors'    => $errors,
+			'mode'      => $mode,
 		);
 	}
 
@@ -278,13 +469,31 @@ class MVN_Cleaner {
 	private static function apply( $issue ) {
 		$rel    = isset( $issue['rel'] ) ? $issue['rel'] : '';
 		$source = isset( $issue['source'] ) ? $issue['source'] : 'file';
-		$action = isset( $issue['action'] ) ? $issue['action'] : 'quarantine';
+		$action = isset( $issue['_action_norm'] ) ? $issue['_action_norm'] : self::normalized_action( $issue );
+		if ( '' === $action ) {
+			$action = isset( $issue['action'] ) ? $issue['action'] : 'quarantine';
+		}
+
+		// Known false-positive signatures: dismiss without mutating the site.
+		if ( self::issue_is_known_false_positive( $issue ) ) {
+			mvn_log( 'Dismissed known FP without mutation: ' . $rel . ' (' . ( isset( $issue['sig'] ) ? $issue['sig'] : '' ) . ')' );
+			return true;
+		}
 
 		if ( 'db' === $source || 0 === strpos( $rel, 'db:' ) ) {
 			return self::apply_db( $issue );
 		}
 		if ( 'as' === $source || 0 === strpos( $rel, 'as:' ) || 'as_delete' === $action ) {
 			return self::apply_as( $issue );
+		}
+
+		if ( 'repo_repair' === $action || 'manual_review' === $action ) {
+			return new WP_Error(
+				'manual_required',
+				'repo_repair' === $action
+					? 'این فایل باید از مخزن رسمی پلاگین/قالب بازسازی شود — از صفحه «تعمیر هسته / پلاگین» استفاده کنید، نه قرنطینه.'
+					: 'این مورد نیاز به بررسی دستی دارد (حذف خودکار ممکن است سایت را از کار بیندازد). از «امن است» یا بررسی دستی استفاده کنید.'
+			);
 		}
 
 		$abs = mvn_abs_path( $rel );
@@ -312,10 +521,11 @@ class MVN_Cleaner {
 			case 'quarantine_delete':
 			case 'delete_core_extra':
 				if ( $is_core && 'delete_core_extra' === $action ) {
-					// Only extras (not official core paths that appear in allowlist as real files).
-					// Extras are files under wp-admin/wp-includes that are NOT in checksum map —
-					// still under "core path" prefix, so allow delete here.
 					return self::delete_file( $rel, $abs, isset( $issue['sig'] ) ? $issue['sig'] : 'core_extra' );
+				}
+				// Never delete protected theme/plugin bootstrap via quarantine_delete.
+				if ( self::is_protected_live_path( $rel ) ) {
+					return new WP_Error( 'protected_live', 'این فایل حیاتی است و برای جلوگیری از از کار افتادن وردپرس حذف نمی‌شود.' );
 				}
 				return self::delete_file( $rel, $abs, isset( $issue['sig'] ) ? $issue['sig'] : 'malware' );
 
@@ -323,6 +533,9 @@ class MVN_Cleaner {
 				return MVN_Core_Repair::repair_one( $rel );
 
 			case 'quarantine':
+				if ( self::is_protected_live_path( $rel ) ) {
+					return new WP_Error( 'protected_live', 'ایزوله کردن این فایل حیاتی ممنوع است — سایت از کار می‌افتد. بررسی دستی یا تعمیر پلاگین/قالب.' );
+				}
 				// Isolate = move to quarantine (remove live copy).
 				$result = MVN_Quarantine::isolate(
 					$rel,
@@ -340,6 +553,33 @@ class MVN_Cleaner {
 			default:
 				return self::clean_file( $rel, $abs, $issue );
 		}
+	}
+
+	/**
+	 * Detect remediation-time false positives (benign plugin/theme/DB patterns).
+	 */
+	private static function issue_is_known_false_positive( $issue ) {
+		$sig     = isset( $issue['sig'] ) ? $issue['sig'] : '';
+		$rel     = isset( $issue['rel'] ) ? str_replace( '\\', '/', (string) $issue['rel'] ) : '';
+		$snippet = isset( $issue['snippet'] ) ? (string) $issue['snippet'] : '';
+		$detail  = isset( $issue['detail'] ) ? (string) $issue['detail'] : '';
+		$blob    = $snippet . "\n" . $detail;
+
+		if ( 'svg_script_payload' === $sig && preg_match( '/application\/ld\+json|FAQPage|schema\.org|uagb\/faq/i', $blob ) ) {
+			return true;
+		}
+		if ( 'hidden_iframe' === $sig ) {
+			if ( preg_match( '/litespeedHiddenIframe|class=["\']blockUI|jquery\.blockUI|blockUI/i', $blob ) ) {
+				return true;
+			}
+			if ( false !== strpos( $rel, 'litespeed-cache/' ) || false !== strpos( $rel, 'wp-optimize/' ) ) {
+				return true;
+			}
+		}
+		if ( 'variable_variables_eval' === $sig && preg_match( '/\$sanitize_func\s*\(|sanitize_(?:text|textarea|email|title|key|file_name|hex_color)/i', $blob ) ) {
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -401,7 +641,21 @@ class MVN_Cleaner {
 		$cleaned = preg_replace( '/\x3c\x3fphp\s*\x3f\x3e\s*/', '', $cleaned );
 
 		if ( 0 === $hits || $cleaned === $original ) {
-			// Could not auto-clean — isolate (quarantine + remove live file).
+			// Never isolate protected paths — that whitescreens WordPress.
+			if ( self::is_protected_live_path( $rel ) ) {
+				return new WP_Error(
+					'uncleanable_protected',
+					'کد قابل حذف خودکار نبود و این فایل حیاتی است؛ برای جلوگیری از از کار افتادن سایت ایزوله نشد. دستی بررسی کنید یا «امن است» بزنید.'
+				);
+			}
+			// Inside installed plugins/themes: prefer fail over delete (repair from repo instead).
+			if ( 0 === strpos( $rel, 'wp-content/plugins/' ) || 0 === strpos( $rel, 'wp-content/themes/' ) ) {
+				return new WP_Error(
+					'uncleanable_extension',
+					'کد قابل حذف خودکار از پلاگین/قالب نبود. به‌جای حذف فایل، از تعمیر پلاگین/قالب یا بررسی دستی استفاده کنید.'
+				);
+			}
+			// Could not auto-clean — isolate (quarantine + remove live file) only for orphan/uploads junk.
 			$result = MVN_Quarantine::isolate(
 				$rel,
 				array(
@@ -449,7 +703,21 @@ class MVN_Cleaner {
 
 			case 'db_review':
 			default:
-				return new WP_Error( 'db_review', 'این مورد دیتابیس نیاز به بررسی دستی دارد (کاربر/option حساس).' );
+				// Soft-dismiss schema.org / FAQ JSON-LD false positives.
+				$fetch = null;
+				$row_id = isset( $issue['row_id'] ) ? (int) $issue['row_id'] : 0;
+				if ( $table && $row_id ) {
+					$fetch = self::db_fetch_row( $table, $row_id );
+					if ( ! is_wp_error( $fetch ) ) {
+						$col = isset( $issue['column'] ) ? $issue['column'] : '';
+						$content = ( $col && isset( $fetch['row'][ $col ] ) ) ? (string) $fetch['row'][ $col ] : '';
+						if ( self::db_finding_is_false_positive( $issue, $fetch['row'], $content ) ) {
+							mvn_log( 'DB review dismissed as FP: ' . $rel );
+							return true;
+						}
+					}
+				}
+				return new WP_Error( 'db_review', 'این مورد دیتابیس نیاز به بررسی دستی دارد (کاربر/option حساس). از «امن است» استفاده کنید اگر مطمئنید.' );
 		}
 	}
 
@@ -559,6 +827,14 @@ class MVN_Cleaner {
 	 */
 	private static function db_finding_is_false_positive( $issue, $row, $content ) {
 		$table = isset( $issue['table'] ) ? $issue['table'] : '';
+		$sig   = isset( $issue['sig'] ) ? $issue['sig'] : '';
+
+		// FAQ / schema.org JSON-LD in post content (matched by loose <script> signatures).
+		if ( in_array( $sig, array( 'svg_script_payload', 'suspicious_script_src' ), true )
+			&& preg_match( '/application\/ld\+json|FAQPage|schema\.org|uagb\/faq/i', $content ) ) {
+			return true;
+		}
+
 		if ( 'options' === $table ) {
 			$name = isset( $row['option_name'] ) ? $row['option_name'] : '';
 			if ( $name && mvn_db_is_benign_option( $name ) ) {

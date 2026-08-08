@@ -542,16 +542,27 @@
   $('.mvn-fix-batch').on('click', function () {
     if ($(this).prop('disabled')) return;
     var $btn = $(this);
-    var filter = $btn.data('filter') || '';
+    var filter = $btn.data('filter');
+    if (typeof filter === 'undefined' || filter === null) {
+      filter = 'safe';
+    }
     var total = filter
       ? parseInt(($btn.text().match(/\((\d+)\)/) || [])[1] || '0', 10)
       : parseInt(
-          ($('#mvn-fix-all').text().match(/\((\d+)\)/) || [])[1] ||
+          ($('#mvn-fix-safe').text().match(/\((\d+)\)/) || [])[1] ||
             $('#mvn-issues-table tbody tr').length,
           10
         );
     if (!total) {
       total = $('#mvn-issues-table tbody tr').length;
+    }
+
+    if (filter === 'all' || filter === 'clean' || filter === 'quarantine') {
+      var riskyOk = window.confirm(
+        'این عملیات پرخطر است و ممکن است پلاگین/قالب را از کار بیندازد.\n\n' +
+          'پیشنهاد: ابتدا «رفع امن» را اجرا کنید.\n\nادامه می‌دهید؟'
+      );
+      if (!riskyOk) return;
     }
 
     setFixBatchButtonsDisabled(true);
@@ -561,9 +572,15 @@
         maybeDeactivateThen(
           plugins,
           function () {
-            if (!plugins.length && !window.confirm(MVN.i18n.confirm)) {
-              setFixBatchButtonsDisabled(false);
-              return;
+            if (!plugins.length) {
+              var msg =
+                filter === 'safe'
+                  ? 'فقط موارد امن (بدون خطر از کار افتادن وردپرس) رفع شوند؟'
+                  : MVN.i18n.confirm;
+              if (!window.confirm(msg)) {
+                setFixBatchButtonsDisabled(false);
+                return;
+              }
             }
             if (plugins.length && !window.confirm('ادامه رفع مشکلات؟')) {
               setFixBatchButtonsDisabled(false);

@@ -1,7 +1,7 @@
 {
-  "version": "1.0.0",
-  "updated_at": "2026-08-07",
-  "min_plugin": "1.6.0",
+  "version": "1.0.1",
+  "updated_at": "2026-08-08",
+  "min_plugin": "1.7.5",
   "signatures": [
     {
       "id": "assert_string_call",
@@ -39,7 +39,7 @@
       "id": "svg_script_payload",
       "label": "SVG با اسکریپت / event handler مخرب",
       "severity": "warning",
-      "pattern": "/<(?:script|foreignObject)[\\s>]|\\bon(?:load|error|click)\\s*=/i",
+      "pattern": "/<svg[\\s\\S]{0,4000}<(?:script|foreignObject)[\\s>]|<svg[^>]+\\bon(?:load|error|click)\\s*=/i",
       "scope": "svg",
       "clean": "none"
     },

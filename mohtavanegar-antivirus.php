@@ -3,7 +3,7 @@
  * Plugin Name:       Mohtavanegar Antivirus
  * Plugin URI:        https://mohtavanegar.local/
  * Description:       آنتی‌ویروس وردپرس: اسکن بدافزار، حذف کدهای تزریق‌شده، تعمیر فایل‌های هسته از سورس سالم، بازیابی htaccess، حذف htaccess های جعلی، سخت‌سازی امنیتی (Brute Force، XMLRPC، سطح دسترسی‌ها).
- * Version:           1.7.4
+ * Version:           1.7.5
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            Mohtavanegar Security
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MVN_VERSION', '1.7.4' );
+define( 'MVN_VERSION', '1.7.5' );
 define( 'MVN_PLUGIN_FILE', __FILE__ );
 define( 'MVN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MVN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -74,6 +74,13 @@ function mvn_deactivate() {
 MVN_Hardening::instance()->boot();
 MVN_Http_Guard::instance()->boot();
 MVN_Perf::instance()->boot();
+
+// Refresh bundled signature pack when plugin version advances.
+$mvn_installed_ver = get_option( 'mvn_plugin_version', '' );
+if ( $mvn_installed_ver !== MVN_VERSION ) {
+	MVN_Signature_Pack::install_from_bundled();
+	update_option( 'mvn_plugin_version', MVN_VERSION, false );
+}
 
 if ( is_admin() ) {
 	require_once MVN_PLUGIN_DIR . 'admin/class-mvn-admin.php';

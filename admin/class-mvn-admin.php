@@ -445,11 +445,11 @@ class MVN_Admin {
 
 	public function ajax_fix_preview() {
 		$this->guard();
-		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
+		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : 'safe';
 		$id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
-		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra' );
+		$allowed = array( '', 'safe', 'all', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra', 'repo_repair', 'manual_review' );
 		if ( ! in_array( $filter, $allowed, true ) ) {
-			$filter = '';
+			$filter = 'safe';
 		}
 		$plugins = MVN_Cleaner::affected_active_plugins( $filter, $id ? $id : null );
 		wp_send_json_success(
@@ -492,10 +492,10 @@ class MVN_Admin {
 
 	public function ajax_fix_batch() {
 		$this->guard();
-		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
-		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra' );
+		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : 'safe';
+		$allowed = array( '', 'safe', 'all', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra', 'repo_repair', 'manual_review' );
 		if ( ! in_array( $filter, $allowed, true ) ) {
-			$filter = '';
+			$filter = 'safe';
 		}
 		@set_time_limit( 120 );
 		$result = MVN_Cleaner::fix_batch( $filter, 15 );

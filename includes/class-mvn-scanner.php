@@ -785,6 +785,16 @@ class MVN_Scanner {
 		if ( 'postmeta' === $table && isset( $row['meta_key'] ) && mvn_db_is_benign_meta_key( $row['meta_key'] ) ) {
 			return true;
 		}
+		// Schema.org / FAQ JSON-LD is not an SVG script payload.
+		if ( 'svg_script_payload' === $sig_id ) {
+			$ctx = substr( $content, max( 0, $offset - 80 ), strlen( (string) $match ) + 160 );
+			if ( preg_match( '/application\/ld\+json|FAQPage|schema\.org|@type|uagb\/faq/i', $ctx ) ) {
+				return true;
+			}
+			if ( ! preg_match( '/<svg[\s>]/i', substr( $content, max( 0, $offset - 500 ), 700 ) ) ) {
+				return true;
+			}
+		}
 		return (bool) apply_filters( 'mvn_db_scan_false_positive', false, $sig_id, $table, $row, $column, $content, $offset, $match );
 	}
 
@@ -835,8 +845,11 @@ class MVN_Scanner {
 				break;
 
 			case 'hidden_iframe':
-				// WordPress embed, Plupload/Moxie upload shim, sandboxed iframes.
-				if ( preg_match( '/\bsandbox=|wp-embed|plupload|moxie|src\s*=\s*["\']javascript:/i', $match ) ) {
+				// WordPress embed, Plupload/Moxie, LiteSpeed crawler, jQuery BlockUI.
+				if ( preg_match( '/\bsandbox=|wp-embed|plupload|moxie|src\s*=\s*["\']javascript:|litespeedHiddenIframe|class=["\']blockUI|blockUI/i', $match ) ) {
+					return true;
+				}
+				if ( preg_match( '#/(litespeed-cache|wp-optimize)/#', $rel ) ) {
 					return true;
 				}
 				break;
@@ -852,6 +865,14 @@ class MVN_Scanner {
 					return true;
 				}
 				if ( $offset >= 3 && '->' === substr( $content, $offset - 3, 2 ) ) {
+					return true;
+				}
+				// Whitelisted sanitize callback pattern: $sanitize_func( $_POST[ ... ] )
+				$ctx = substr( $content, max( 0, $offset - 40 ), 160 );
+				if ( preg_match( '/\$sanitize_(?:func|callback|cb)\s*\(/i', $ctx ) ) {
+					return true;
+				}
+				if ( preg_match( '/sanitize_(?:text_field|textarea_field|email|title|key|file_name|hex_color|user)/i', $ctx ) ) {
 					return true;
 				}
 				break;
@@ -930,6 +951,7 @@ class MVN_Scanner {
 		$counts = array(
 			'total'              => 0,
 			'fixable'            => 0,
+			'safe_fixable'       => 0,
 			'clean'              => 0,
 			'delete_htaccess'    => 0,
 			'quarantine_delete'  => 0,
@@ -941,6 +963,8 @@ class MVN_Scanner {
 			'core_repair_file'   => 0,
 			'delete_core_extra'  => 0,
 			'db_review'          => 0,
+			'repo_repair'        => 0,
+			'manual_review'      => 0,
 		);
 		if ( ! is_array( $issues ) ) {
 			return $counts;
@@ -948,11 +972,17 @@ class MVN_Scanner {
 		foreach ( $issues as $issue ) {
 			$counts['total']++;
 			$action = isset( $issue['action'] ) ? $issue['action'] : '';
+			$norm   = class_exists( 'MVN_Cleaner' ) ? MVN_Cleaner::normalized_action( $issue ) : $action;
 			if ( isset( $counts[ $action ] ) ) {
 				$counts[ $action ]++;
+			} elseif ( isset( $counts[ $norm ] ) ) {
+				$counts[ $norm ]++;
 			}
-			if ( ! in_array( $action, array( 'core_repair', 'db_review' ), true ) ) {
+			if ( ! in_array( $norm, array( 'core_repair', 'db_review', 'repo_repair', 'manual_review' ), true ) ) {
 				$counts['fixable']++;
+			}
+			if ( class_exists( 'MVN_Cleaner' ) && MVN_Cleaner::is_safe_auto_fix( $issue ) ) {
+				$counts['safe_fixable']++;
 			}
 		}
 		return $counts;

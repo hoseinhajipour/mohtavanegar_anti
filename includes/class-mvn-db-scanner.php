@@ -370,7 +370,11 @@ class MVN_DB_Scanner {
 		$scope_hint = self::scope_hint( $column, $content );
 
 		foreach ( $sigs as $sig ) {
-			if ( 'htaccess' === $sig['scope'] ) {
+			if ( 'htaccess' === $sig['scope'] || 'ini' === $sig['scope'] ) {
+				continue;
+			}
+			// SVG signatures only belong on real SVG markup — not FAQ <script type="ld+json">.
+			if ( 'svg' === $sig['scope'] && ! preg_match( '/<svg[\s>]/i', $content ) ) {
 				continue;
 			}
 			if ( $serialized && ! in_array( $sig['id'], $allow_on_serialized, true ) ) {

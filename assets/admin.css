@@ -291,6 +291,26 @@
   color: #0369a1;
 }
 
+.mvn-risk-safe {
+  background: #edfaef;
+  color: #1a7f37;
+}
+
+.mvn-risk-caution {
+  background: #fff4e5;
+  color: #9a6700;
+}
+
+.mvn-risk-manual {
+  background: #fce8e6;
+  color: #c5221f;
+}
+
+.mvn-fix-risky {
+  border-color: #d63638 !important;
+  color: #d63638 !important;
+}
+
 .mvn-row-slow td {
   background: #fffbeb;
 }
