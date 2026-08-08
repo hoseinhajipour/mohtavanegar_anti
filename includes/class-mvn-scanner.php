@@ -23,6 +23,7 @@ class MVN_Scanner {
 		$incremental = ! isset( $opts['incremental'] ) || ! empty( $opts['incremental'] );
 		$full        = ! empty( $opts['full'] );
 		$scan_db     = ! isset( $opts['scan_db'] ) || ! empty( $opts['scan_db'] );
+		$scan_as     = ! isset( $opts['scan_as'] ) || ! empty( $opts['scan_as'] );
 		$scan_core   = ! isset( $opts['scan_core'] ) || ! empty( $opts['scan_core'] );
 		$scan_repo   = ! isset( $opts['scan_repo'] ) || ! empty( $opts['scan_repo'] );
 		$scan_media  = ! isset( $opts['scan_media'] ) || ! empty( $opts['scan_media'] );
@@ -127,6 +128,7 @@ class MVN_Scanner {
 			'deep'        => $deep,
 			'incremental' => $incremental ? 1 : 0,
 			'scan_db'     => $scan_db ? 1 : 0,
+			'scan_as'     => $scan_as ? 1 : 0,
 			'scan_core'   => $scan_core ? 1 : 0,
 			'scan_repo'   => $scan_repo ? 1 : 0,
 			'scan_media'  => $scan_media ? 1 : 0,
@@ -148,6 +150,7 @@ class MVN_Scanner {
 				'php'      => 0,
 				'js'       => 0,
 				'db'       => 0,
+				'as'       => 0,
 				'core'     => 0,
 				'repo'     => 0,
 				'dropin'   => 0,
@@ -206,6 +209,17 @@ class MVN_Scanner {
 			MVN_DB_Scanner::tick( $state );
 			$state['updated_at'] = gmdate( 'c' );
 			if ( MVN_DB_Scanner::is_done( $state ) ) {
+				self::after_db_phase( $state );
+			} else {
+				self::commit_tick_state( $state );
+			}
+			return $state;
+		}
+
+		if ( 'as' === $phase ) {
+			MVN_AS_Scanner::tick( $state );
+			$state['updated_at'] = gmdate( 'c' );
+			if ( MVN_AS_Scanner::is_done( $state ) ) {
 				self::finish_scan( $state );
 			} else {
 				self::commit_tick_state( $state );
@@ -298,12 +312,28 @@ class MVN_Scanner {
 	}
 
 	/**
-	 * Repo integrity finished — move to DB or finalize.
+	 * Repo integrity finished — move to DB, AS, or finalize.
 	 */
 	private static function after_repo_phase( &$state ) {
 		if ( ! empty( $state['scan_db'] ) ) {
 			MVN_DB_Scanner::begin_phase( $state );
 			mvn_state_write( self::STATE_KEY, $state );
+			return;
+		}
+		self::after_db_phase( $state );
+	}
+
+	/**
+	 * DB phase finished — move to Action Scheduler or finalize.
+	 */
+	private static function after_db_phase( &$state ) {
+		if ( ! empty( $state['scan_as'] ) ) {
+			MVN_AS_Scanner::begin_phase( $state );
+			if ( MVN_AS_Scanner::is_done( $state ) ) {
+				self::finish_scan( $state );
+			} else {
+				mvn_state_write( self::STATE_KEY, $state );
+			}
 			return;
 		}
 		self::finish_scan( $state );
@@ -408,6 +438,7 @@ class MVN_Scanner {
 				'skipped_unchanged' => isset( $state['skipped_unchanged'] ) ? $state['skipped_unchanged'] : 0,
 				'incremental'       => ! empty( $state['incremental'] ),
 				'scan_db'           => ! empty( $state['scan_db'] ),
+				'scan_as'           => ! empty( $state['scan_as'] ),
 				'scan_core'         => ! empty( $state['scan_core'] ),
 				'scan_repo'         => ! empty( $state['scan_repo'] ),
 				'stats'             => isset( $state['stats'] ) ? $state['stats'] : array(),
@@ -415,7 +446,7 @@ class MVN_Scanner {
 			),
 			false
 		);
-		mvn_log( 'Scan ' . $state['status'] . ': issues=' . count( $issues ) . ' core=' . ( isset( $state['stats']['core'] ) ? $state['stats']['core'] : 0 ) . ' db=' . ( isset( $state['stats']['db'] ) ? $state['stats']['db'] : 0 ) );
+		mvn_log( 'Scan ' . $state['status'] . ': issues=' . count( $issues ) . ' core=' . ( isset( $state['stats']['core'] ) ? $state['stats']['core'] : 0 ) . ' db=' . ( isset( $state['stats']['db'] ) ? $state['stats']['db'] : 0 ) . ' as=' . ( isset( $state['stats']['as'] ) ? $state['stats']['as'] : 0 ) );
 		$state['issues']      = $issues;
 		$state['files']       = array();
 		$state['all_files']   = array();
@@ -715,7 +746,13 @@ class MVN_Scanner {
 		}
 
 		if ( empty( $issue['source'] ) ) {
-			$issue['source'] = ( 0 === strpos( $rel, 'db:' ) ) ? 'db' : 'file';
+			if ( 0 === strpos( $rel, 'db:' ) ) {
+				$issue['source'] = 'db';
+			} elseif ( 0 === strpos( $rel, 'as:' ) ) {
+				$issue['source'] = 'as';
+			} else {
+				$issue['source'] = 'file';
+			}
 		}
 
 		$severity   = isset( $issue['severity'] ) ? $issue['severity'] : 'warning';
@@ -899,6 +936,7 @@ class MVN_Scanner {
 			'quarantine'         => 0,
 			'db_clean'           => 0,
 			'db_delete_option'   => 0,
+			'as_delete'          => 0,
 			'core_repair'        => 0,
 			'core_repair_file'   => 0,
 			'delete_core_extra'  => 0,

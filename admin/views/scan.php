@@ -9,7 +9,7 @@ $is_active   = in_array( $scan_status, array( 'running', 'paused' ), true );
 	<h2>اسکن بدافزار</h2>
 	<p>
 		اسکنر فایل‌های PHP / JS / HTML، رسانه‌های uploads (پلی‌گلوت)، <code>.htaccess</code>،
-		<code>.user.ini</code>، drop-inها، و در صورت فعال بودن checksum هسته / پلاگین‌قالب مخزن و دیتابیس را بررسی می‌کند.
+		<code>.user.ini</code>، drop-inها، و در صورت فعال بودن checksum هسته / پلاگین‌قالب مخزن، دیتابیس و Action Scheduler را بررسی می‌کند.
 	</p>
 
 	<?php
@@ -66,6 +66,9 @@ $is_active   = in_array( $scan_status, array( 'running', 'paused' ), true );
 		<label><input type="checkbox" id="mvn-scan-db" value="1" checked <?php disabled( $is_active ); ?>> اسکن دیتابیس (options / posts / users — کشف بدافزار پنهان)</label>
 	</div>
 	<div class="mvn-form-row">
+		<label><input type="checkbox" id="mvn-scan-as" value="1" checked <?php disabled( $is_active ); ?>> اسکن Action Scheduler (اقدامات زمان‌بندی‌شده مشکوک)</label>
+	</div>
+	<div class="mvn-form-row">
 		<label><input type="checkbox" id="mvn-scan-incremental" value="1" checked <?php disabled( $is_active ); ?>> اسکن افزایشی (پرش از فایل‌های سالم و بدون تغییر)</label>
 	</div>
 	<div class="mvn-form-row">
@@ -99,6 +102,54 @@ $is_active   = in_array( $scan_status, array( 'running', 'paused' ), true );
 	</div>
 
 	<div id="mvn-scan-result" style="display:none;margin-top:16px"></div>
+</div>
+
+<?php
+$as_meta  = isset( $as_meta ) && is_array( $as_meta ) ? $as_meta : array();
+$as_state = isset( $as_state ) && is_array( $as_state ) ? $as_state : array();
+$as_avail = ! empty( $as_meta['available'] );
+$as_count = isset( $as_meta['count'] ) ? (int) $as_meta['count'] : 0;
+$as_status = ( ! empty( $as_state['status'] ) ) ? $as_state['status'] : 'idle';
+$as_running = ( 'running' === $as_status );
+?>
+<div class="mvn-card" style="margin-top:20px">
+	<h2>اسکن Action Scheduler</h2>
+	<p>
+		اقدامات زمان‌بندی‌شده (جداول <code>actionscheduler_*</code>) را برای hookها و آرگومان‌های مشکوک بررسی می‌کند.
+		یافته‌ها در صفحه رفع مشکلات قابل حذف و قرنطینه هستند.
+	</p>
+	<ul class="mvn-kv">
+		<li>
+			<span>وضعیت جداول</span>
+			<b><?php echo $as_avail ? 'موجود' : 'یافت نشد'; ?></b>
+		</li>
+		<?php if ( $as_avail ) : ?>
+		<li>
+			<span>تعداد actionها</span>
+			<b id="mvn-as-count"><?php echo (int) $as_count; ?></b>
+		</li>
+		<?php endif; ?>
+	</ul>
+	<?php if ( ! $as_avail ) : ?>
+		<p class="mvn-muted">این سایت جدول Action Scheduler ندارد (معمولاً با ووکامرس یا پلاگین Action Scheduler نصب می‌شود).</p>
+	<?php else : ?>
+		<div class="mvn-actions">
+			<button type="button" class="button button-primary" id="mvn-as-scan-start" <?php disabled( $as_running || $is_active ); ?>>شروع اسکن Action Scheduler</button>
+			<button type="button" class="button button-link-delete" id="mvn-as-purge-all" <?php disabled( $as_running || $is_active || $as_count <= 0 ); ?>>پاکسازی همه actionscheduler_actions</button>
+		</div>
+		<p class="mvn-muted" style="margin-top:8px">
+			پاکسازی همه: کل ردیف‌های <code>actionscheduler_actions</code> به‌همراه لاگ‌ها و claimها حذف می‌شوند.
+			یک خلاصه (نمونه) در قرنطینه ذخیره می‌شود. پلاگین‌هایی مثل ووکامرس در صورت نیاز actionهای جدید را دوباره زمان‌بندی می‌کنند.
+		</p>
+		<div id="mvn-as-scan-progress" class="mvn-progress-wrap" style="<?php echo $as_running ? '' : 'display:none'; ?>margin-top:16px">
+			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-as-scan-bar" style="width:0%"></div></div>
+			<div class="mvn-progress-meta">
+				<span id="mvn-as-scan-label">آماده‌سازی...</span>
+				<span id="mvn-as-scan-pct">0%</span>
+			</div>
+		</div>
+		<div id="mvn-as-scan-result" style="margin-top:12px"></div>
+	<?php endif; ?>
 </div>
 <script type="text/javascript">
 window.MVN_SCAN_BOOT = <?php echo wp_json_encode( array( 'status' => $scan_status ) ); ?>;

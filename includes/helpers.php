@@ -398,6 +398,16 @@ function mvn_security_checklist( $ctx = array() ) {
 			'action' => 'سخت‌سازی',
 		),
 		array(
+			'id'     => 'disable_wp_cron',
+			'title'  => 'غیرفعال‌سازی WP-Cron',
+			'desc'   => ! empty( $hard['disable_wp_cron'] ) || ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON )
+				? 'WP-Cron غیرفعال است'
+				: 'WP-Cron هنوز فعال است (اختیاری)',
+			'done'   => ! empty( $hard['disable_wp_cron'] ) || ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
 			'id'     => 'block_external_http',
 			'title'  => 'مسدودسازی HTTP خارجی',
 			'desc'   => ! empty( $hard['block_external_http'] ) || ( defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL )

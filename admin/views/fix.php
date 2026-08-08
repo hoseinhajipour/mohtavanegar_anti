@@ -25,6 +25,9 @@ $fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 		<strong>یافته‌های دیتابیس</strong> (شروع با <code>db:</code>) ممکن است نیاز به بررسی دستی داشته باشند — مخصوصاً کاربران ادمین مشکوک. optionهای محافظت‌شده وردپرس هرگز خودکار حذف نمی‌شوند.
 	</p>
 	<p class="mvn-muted">
+		<strong>یافته‌های Action Scheduler</strong> (شروع با <code>as:</code>) اقدامات زمان‌بندی‌شده مشکوک هستند؛ با «حذف AS مشکوک» بعد از پشتیبان‌گیری در قرنطینه پاک می‌شوند.
+	</p>
+	<p class="mvn-muted">
 		عمل <code>quarantine</code> اکنون فایل را <strong>ایزوله</strong> می‌کند (کپی به قرنطینه + حذف از مسیر اصلی)، نه فقط کپی.
 	</p>
 
@@ -40,6 +43,7 @@ $fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-core-extra" data-filter="delete_core_extra" <?php disabled( empty( $ac['delete_core_extra'] ) ); ?>>حذف فایل اضافی هسته<?php echo ! empty( $ac['delete_core_extra'] ) ? ' (' . (int) $ac['delete_core_extra'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-clean" data-filter="db_clean" <?php disabled( empty( $ac['db_clean'] ) ); ?>>پاکسازی DB<?php echo ! empty( $ac['db_clean'] ) ? ' (' . (int) $ac['db_clean'] . ')' : ''; ?></button>
 			<button type="button" class="button mvn-fix-batch" id="mvn-fix-db-option" data-filter="db_delete_option" <?php disabled( empty( $ac['db_delete_option'] ) ); ?>>حذف option مشکوک<?php echo ! empty( $ac['db_delete_option'] ) ? ' (' . (int) $ac['db_delete_option'] . ')' : ''; ?></button>
+			<button type="button" class="button mvn-fix-batch" id="mvn-fix-as-delete" data-filter="as_delete" <?php disabled( empty( $ac['as_delete'] ) ); ?>>حذف AS مشکوک<?php echo ! empty( $ac['as_delete'] ) ? ' (' . (int) $ac['as_delete'] . ')' : ''; ?></button>
 			<a class="button" href="<?php echo esc_url( $export_url ); ?>">خروجی CSV</a>
 			<button type="button" class="button" id="mvn-fix-clear">پاک کردن لیست (اسکن مجدد)</button>
 		</div>
@@ -85,6 +89,12 @@ $fixable = isset( $ac['fixable'] ) ? (int) $ac['fixable'] : $count;
 							<code><?php echo esc_html( $iss['rel'] ); ?></code>
 							<?php if ( ! empty( $iss['table'] ) ) : ?>
 								<br><small class="mvn-muted"><?php echo esc_html( $iss['table'] ); ?> / <?php echo esc_html( isset( $iss['column'] ) ? $iss['column'] : '' ); ?></small>
+							<?php endif; ?>
+						<?php elseif ( ! empty( $iss['source'] ) && 'as' === $iss['source'] ) : ?>
+							<span class="mvn-badge mvn-badge-warning">AS</span>
+							<code><?php echo esc_html( $iss['rel'] ); ?></code>
+							<?php if ( ! empty( $iss['hook'] ) ) : ?>
+								<br><small class="mvn-muted">hook: <?php echo esc_html( $iss['hook'] ); ?><?php echo ! empty( $iss['as_status'] ) ? ' [' . esc_html( $iss['as_status'] ) . ']' : ''; ?></small>
 							<?php endif; ?>
 						<?php elseif ( ! empty( $iss['source'] ) && 'core' === $iss['source'] ) : ?>
 							<span class="mvn-badge mvn-badge-critical">CORE</span>

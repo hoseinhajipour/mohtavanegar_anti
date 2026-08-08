@@ -123,6 +123,9 @@ $ring_off  = $ring_c * ( 1 - ( $cl_pct / 100 ) );
 				<?php if ( ! empty( $last['scan_db'] ) ) : ?>
 				<li><span>اسکن DB</span><b class="mvn-ok">فعال<?php echo ! empty( $last['db_total'] ) ? ' (' . (int) $last['db_total'] . ' ردیف)' : ''; ?></b></li>
 				<?php endif; ?>
+				<?php if ( ! empty( $last['scan_as'] ) ) : ?>
+				<li><span>اسکن Action Scheduler</span><b class="mvn-ok">فعال</b></li>
+				<?php endif; ?>
 				<li><span>مشکلات باز</span><b><?php echo (int) $issue_count; ?></b></li>
 			</ul>
 			<?php if ( $issue_count > 0 ) : ?>

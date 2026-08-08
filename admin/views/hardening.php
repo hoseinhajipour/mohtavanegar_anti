@@ -89,6 +89,17 @@ $s = $settings;
 				</td>
 			</tr>
 			<tr>
+				<th>غیرفعال‌سازی WP-Cron</th>
+				<td>
+					<label><input type="checkbox" name="settings[disable_wp_cron]" value="1" <?php checked( ! empty( $s['disable_wp_cron'] ) ); ?>>
+					<code>DISABLE_WP_CRON</code> — توقف cron وردپرس و مسدود کردن <code>wp-cron.php</code></label>
+					<p class="description" style="margin-top:6px">
+						اسپاون خودکار روی بازدیدها قطع می‌شود و دسترسی مستقیم به <code>wp-cron.php</code> هم مسدود است.
+						برای سایت آلوده مفید است؛ بعد از پاکسازی اگر به زمان‌بندی نیاز دارید، خاموشش کنید یا از cron سیستمی روی سرور استفاده کنید.
+					</p>
+				</td>
+			</tr>
+			<tr>
 				<th>مسدودسازی HTTP خارجی</th>
 				<td>
 					<label><input type="checkbox" name="settings[block_external_http]" value="1" <?php checked( ! empty( $s['block_external_http'] ) ); ?>>

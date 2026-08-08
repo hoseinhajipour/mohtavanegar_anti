@@ -52,6 +52,10 @@ function mvn_signature_confidence_map() {
 		'db_spam_injection'         => 68,
 		'db_serialized_shell'       => 90,
 		'db_cron_injection'         => 96,
+		'as_payload_malware'        => 97,
+		'as_suspicious_hook'        => 82,
+		'as_suspicious_group'       => 70,
+		'as_unknown_hook_blob'      => 90,
 		'core_checksum_modified'    => 98,
 		'core_checksum_missing'     => 97,
 		'core_checksum_extra'       => 93,
@@ -78,6 +82,9 @@ function mvn_compute_confidence( $sig_id, $severity, $rel, $content = '' ) {
 		if ( false !== strpos( $rel, ':options:' ) ) {
 			$base = min( 99, $base + 4 );
 		}
+	}
+	if ( 0 === strpos( $rel, 'as:' ) ) {
+		$base = min( 99, $base + 8 );
 	}
 	if ( 0 === strpos( $rel, 'wp-content/plugins/' ) && in_array( $sig_id, array( 'chr_chain', 'long_base64_blob', 'hex_string_chain', 'create_function', 'hidden_iframe' ), true ) ) {
 		$base = max( 15, $base - 18 );

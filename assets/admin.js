@@ -51,6 +51,9 @@
     if (s.stats && s.stats.db) {
       parts.push('DB: ' + s.stats.db);
     }
+    if (s.stats && s.stats.as) {
+      parts.push('AS: ' + s.stats.as);
+    }
     if (s.stats && s.stats.core) {
       parts.push('Core: ' + s.stats.core);
     }
@@ -77,6 +80,9 @@
     if (s.phase === 'db') {
       return 'دیتابیس — ' + (s.db_phase_label || s.db_phase || '...');
     }
+    if (s.phase === 'as') {
+      return 'Action Scheduler';
+    }
     return 'فایل‌ها';
   }
 
@@ -96,7 +102,7 @@
     var paused = status === 'paused';
     var active = running || paused;
     $('#mvn-scan-start').prop('disabled', active);
-    $('#mvn-scan-scope, #mvn-scan-deep, #mvn-scan-core, #mvn-scan-repo, #mvn-scan-media, #mvn-scan-db, #mvn-scan-incremental, #mvn-scan-full').prop('disabled', active);
+    $('#mvn-scan-scope, #mvn-scan-deep, #mvn-scan-core, #mvn-scan-repo, #mvn-scan-media, #mvn-scan-db, #mvn-scan-as, #mvn-scan-incremental, #mvn-scan-full').prop('disabled', active);
     $('#mvn-scan-pause').toggle(running);
     $('#mvn-scan-resume').toggle(paused);
     $('#mvn-scan-stop').toggle(active);
@@ -255,6 +261,7 @@
       incremental: full ? 0 : $('#mvn-scan-incremental').is(':checked') ? 1 : 0,
       full: full ? 1 : 0,
       scan_db: $('#mvn-scan-db').is(':checked') ? 1 : 0,
+      scan_as: $('#mvn-scan-as').is(':checked') ? 1 : 0,
       scan_core: $('#mvn-scan-core').is(':checked') ? 1 : 0,
       scan_repo: $('#mvn-scan-repo').is(':checked') ? 1 : 0,
       scan_media: $('#mvn-scan-media').is(':checked') ? 1 : 0,
@@ -659,6 +666,130 @@
       });
   });
 
+  /* ---------- Action Scheduler scan (standalone) ---------- */
+  function runAsScanLoop() {
+    post('mvn_as_scan_tick')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-as-scan-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $('#mvn-as-scan-start').prop('disabled', false);
+          return;
+        }
+        var s = res.data;
+        var p = pct(s.processed, s.total);
+        $('#mvn-as-scan-bar').css('width', p + '%');
+        $('#mvn-as-scan-pct').text(p + '%');
+        $('#mvn-as-scan-label').text(
+          'Action Scheduler — ' + s.processed + '/' + s.total + ' — یافته‌ها: ' + s.issue_count
+        );
+        if (s.status === 'running') {
+          setTimeout(runAsScanLoop, 80);
+        } else if (s.status === 'done') {
+          var msg = 'اسکن Action Scheduler تمام شد. مشکلات: <b>' + s.issue_count + '</b>';
+          if (s.issue_count > 0) {
+            msg += ' — <a href="admin.php?page=mvn-fix">رفتن به رفع مشکلات</a>';
+          } else {
+            msg += ' — مورد مشکوکی یافت نشد.';
+          }
+          notice($('#mvn-as-scan-result'), msg, s.issue_count === 0);
+          $('#mvn-as-scan-start').prop('disabled', false);
+          if (s.issue_count > 0) {
+            setTimeout(function () {
+              window.location.href = 'admin.php?page=mvn-fix';
+            }, 1200);
+          }
+        }
+      })
+      .fail(function () {
+        notice($('#mvn-as-scan-result'), 'خطای ارتباط', false);
+        $('#mvn-as-scan-start').prop('disabled', false);
+      });
+  }
+
+  $('#mvn-as-scan-start').on('click', function () {
+    var $btn = $(this);
+    $btn.prop('disabled', true);
+    $('#mvn-as-scan-progress').show();
+    $('#mvn-as-scan-result').empty();
+    $('#mvn-as-scan-bar').css('width', '0%');
+    $('#mvn-as-scan-label').text('آماده‌سازی...');
+    post('mvn_as_scan_start')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-as-scan-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $btn.prop('disabled', false);
+          return;
+        }
+        var s = res.data;
+        var p = pct(s.processed, s.total);
+        $('#mvn-as-scan-bar').css('width', p + '%');
+        $('#mvn-as-scan-pct').text(p + '%');
+        if (s.status === 'done') {
+          var msg = 'اسکن Action Scheduler تمام شد. مشکلات: <b>' + s.issue_count + '</b>';
+          if (s.issue_count > 0) {
+            msg += ' — <a href="admin.php?page=mvn-fix">رفتن به رفع مشکلات</a>';
+          } else {
+            msg += ' — مورد مشکوکی یافت نشد.';
+          }
+          notice($('#mvn-as-scan-result'), msg, s.issue_count === 0);
+          $btn.prop('disabled', false);
+          return;
+        }
+        setTimeout(runAsScanLoop, 50);
+      })
+      .fail(function () {
+        notice($('#mvn-as-scan-result'), 'خطای ارتباط', false);
+        $btn.prop('disabled', false);
+      });
+  });
+
+  $('#mvn-as-purge-all').on('click', function () {
+    var count = parseInt($('#mvn-as-count').text(), 10) || 0;
+    var msg1 =
+      'همه ردیف‌های actionscheduler_actions حذف شوند؟' +
+      (count ? ' (حدود ' + count + ' مورد)' : '') +
+      '\n\nلاگ‌ها و claimها هم پاک می‌شوند. این عمل برگشت‌پذیر نیست (فقط خلاصه نمونه در قرنطینه می‌ماند).';
+    if (!window.confirm(msg1)) {
+      return;
+    }
+    if (!window.confirm('تأیید نهایی: پاکسازی کامل Action Scheduler؟')) {
+      return;
+    }
+    var $btn = $(this);
+    var $scanBtn = $('#mvn-as-scan-start');
+    $btn.prop('disabled', true);
+    $scanBtn.prop('disabled', true);
+    $('#mvn-as-scan-result').empty();
+    post('mvn_as_purge_all')
+      .done(function (res) {
+        if (!res || !res.success) {
+          notice($('#mvn-as-scan-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+          $btn.prop('disabled', false);
+          $scanBtn.prop('disabled', false);
+          return;
+        }
+        var d = res.data || {};
+        var left = typeof d.count === 'number' ? d.count : 0;
+        $('#mvn-as-count').text(left);
+        $btn.prop('disabled', left <= 0);
+        $scanBtn.prop('disabled', false);
+        notice(
+          $('#mvn-as-scan-result'),
+          d.message ||
+            'پاکسازی انجام شد. حذف‌شده: ' +
+              (d.actions_deleted || 0) +
+              ' — باقی‌مانده: ' +
+              left,
+          true
+        );
+      })
+      .fail(function () {
+        notice($('#mvn-as-scan-result'), 'خطای ارتباط', false);
+        $btn.prop('disabled', false);
+        $scanBtn.prop('disabled', false);
+      });
+  });
+
   /* ---------- Core repair ---------- */
   function formatCoreZipStatus(core) {
     if (!core || !core.exists) return 'فایل zip موجود نیست';
@@ -1054,6 +1185,7 @@
       'remove_really_simple',
       'secure_headers',
       'disable_comments',
+      'disable_wp_cron',
       'block_external_http',
       'block_privileged_signup',
       'login_max_attempts',

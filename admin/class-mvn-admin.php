@@ -48,6 +48,9 @@ class MVN_Admin {
 			'mvn_core_selective',
 			'mvn_core_integrity_start',
 			'mvn_core_integrity_tick',
+			'mvn_as_scan_start',
+			'mvn_as_scan_tick',
+			'mvn_as_purge_all',
 			'mvn_plugin_start',
 			'mvn_plugin_tick',
 			'mvn_theme_start',
@@ -170,8 +173,10 @@ class MVN_Admin {
 		$this->render(
 			'scan',
 			array(
-				'state'    => MVN_Scanner::get_state(),
-				'sig_pack' => MVN_Signature_Pack::status(),
+				'state'      => MVN_Scanner::get_state(),
+				'sig_pack'   => MVN_Signature_Pack::status(),
+				'as_meta'    => MVN_AS_Scanner::availability(),
+				'as_state'   => MVN_AS_Scanner::get_standalone_state(),
 			)
 		);
 	}
@@ -315,6 +320,7 @@ class MVN_Admin {
 		$deep  = ! empty( $_POST['deep'] );
 		$full  = ! empty( $_POST['full'] );
 		$scan_db = ! isset( $_POST['scan_db'] ) || ! empty( $_POST['scan_db'] );
+		$scan_as = ! isset( $_POST['scan_as'] ) || ! empty( $_POST['scan_as'] );
 		$scan_core = ! isset( $_POST['scan_core'] ) || ! empty( $_POST['scan_core'] );
 		$scan_repo = ! isset( $_POST['scan_repo'] ) || ! empty( $_POST['scan_repo'] );
 		$scan_media = ! isset( $_POST['scan_media'] ) || ! empty( $_POST['scan_media'] );
@@ -330,6 +336,7 @@ class MVN_Admin {
 				'incremental' => $incremental,
 				'full'        => $full,
 				'scan_db'     => $scan_db,
+				'scan_as'     => $scan_as,
 				'scan_core'   => $scan_core,
 				'scan_repo'   => $scan_repo,
 				'scan_media'  => $scan_media,
@@ -406,6 +413,7 @@ class MVN_Admin {
 			'skipped_unchanged' => isset( $state['skipped_unchanged'] ) ? (int) $state['skipped_unchanged'] : 0,
 			'incremental'       => ! empty( $state['incremental'] ),
 			'scan_db'           => ! empty( $state['scan_db'] ),
+			'scan_as'           => ! empty( $state['scan_as'] ),
 			'scan_core'         => ! empty( $state['scan_core'] ),
 			'scan_repo'         => ! empty( $state['scan_repo'] ),
 			'phase'             => isset( $state['phase'] ) ? $state['phase'] : 'files',
@@ -414,6 +422,7 @@ class MVN_Admin {
 			'repo_label'        => isset( $state['repo_label'] ) ? $state['repo_label'] : '',
 			'db_phase'          => isset( $state['db_phase'] ) ? $state['db_phase'] : '',
 			'db_phase_label'    => ! empty( $state['db_phase'] ) ? MVN_DB_Scanner::sub_phase_label( $state['db_phase'] ) : '',
+			'as_available'      => ! empty( $state['as_available'] ),
 			'stats'             => isset( $state['stats'] ) ? $state['stats'] : array(),
 			'issue_count'       => isset( $state['issues'] ) ? count( $state['issues'] ) : 0,
 			'started_at'        => isset( $state['started_at'] ) ? $state['started_at'] : '',
@@ -438,7 +447,7 @@ class MVN_Admin {
 		$this->guard();
 		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
 		$id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
-		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'core_repair_file', 'delete_core_extra' );
+		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra' );
 		if ( ! in_array( $filter, $allowed, true ) ) {
 			$filter = '';
 		}
@@ -484,7 +493,7 @@ class MVN_Admin {
 	public function ajax_fix_batch() {
 		$this->guard();
 		$filter = isset( $_POST['filter'] ) ? sanitize_key( wp_unslash( $_POST['filter'] ) ) : '';
-		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'core_repair_file', 'delete_core_extra' );
+		$allowed = array( '', 'clean', 'delete_htaccess', 'quarantine_delete', 'quarantine', 'db_clean', 'db_delete_option', 'db_review', 'as_delete', 'core_repair_file', 'delete_core_extra' );
 		if ( ! in_array( $filter, $allowed, true ) ) {
 			$filter = '';
 		}
@@ -629,6 +638,51 @@ class MVN_Admin {
 		@set_time_limit( 120 );
 		$state = MVN_Core_Integrity::standalone_tick();
 		wp_send_json_success( $this->public_core_integrity_state( $state ) );
+	}
+
+	public function ajax_as_scan_start() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$state = MVN_AS_Scanner::standalone_start();
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+		}
+		wp_send_json_success( $this->public_as_scan_state( $state ) );
+	}
+
+	public function ajax_as_scan_tick() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$state = MVN_AS_Scanner::standalone_tick();
+		wp_send_json_success( $this->public_as_scan_state( $state ) );
+	}
+
+	public function ajax_as_purge_all() {
+		$this->guard();
+		@set_time_limit( 300 );
+		$result = MVN_AS_Scanner::purge_all_actions();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		$meta = MVN_AS_Scanner::availability();
+		$result['count'] = isset( $meta['count'] ) ? (int) $meta['count'] : 0;
+		wp_send_json_success( $result );
+	}
+
+	private function public_as_scan_state( $state ) {
+		if ( empty( $state ) ) {
+			return array( 'status' => 'idle' );
+		}
+		return array(
+			'status'       => isset( $state['status'] ) ? $state['status'] : 'idle',
+			'total'        => isset( $state['total'] ) ? (int) $state['total'] : 0,
+			'processed'    => isset( $state['processed'] ) ? (int) $state['processed'] : 0,
+			'as_available' => ! empty( $state['as_available'] ),
+			'issue_count'  => isset( $state['issues'] ) ? count( $state['issues'] ) : 0,
+			'stats'        => isset( $state['stats'] ) ? $state['stats'] : array(),
+			'started_at'   => isset( $state['started_at'] ) ? $state['started_at'] : '',
+			'finished_at'  => isset( $state['finished_at'] ) ? $state['finished_at'] : '',
+		);
 	}
 
 	private function public_core_integrity_state( $state ) {

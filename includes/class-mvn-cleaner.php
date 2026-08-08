@@ -283,6 +283,9 @@ class MVN_Cleaner {
 		if ( 'db' === $source || 0 === strpos( $rel, 'db:' ) ) {
 			return self::apply_db( $issue );
 		}
+		if ( 'as' === $source || 0 === strpos( $rel, 'as:' ) || 'as_delete' === $action ) {
+			return self::apply_as( $issue );
+		}
 
 		$abs = mvn_abs_path( $rel );
 
@@ -448,6 +451,19 @@ class MVN_Cleaner {
 			default:
 				return new WP_Error( 'db_review', 'این مورد دیتابیس نیاز به بررسی دستی دارد (کاربر/option حساس).' );
 		}
+	}
+
+	/**
+	 * Apply remediation for an Action Scheduler finding.
+	 *
+	 * @return true|WP_Error
+	 */
+	private static function apply_as( $issue ) {
+		$action = isset( $issue['action'] ) ? $issue['action'] : 'as_delete';
+		if ( 'as_delete' !== $action ) {
+			return new WP_Error( 'as_unknown', 'عمل پاکسازی Action Scheduler ناشناخته است.' );
+		}
+		return MVN_AS_Scanner::delete_action( $issue );
 	}
 
 	private static function db_clean( $issue ) {

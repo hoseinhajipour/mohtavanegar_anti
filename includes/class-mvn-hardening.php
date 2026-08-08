@@ -39,6 +39,7 @@ class MVN_Hardening {
 			'remove_really_simple'  => 1,
 			'secure_headers'        => 1,
 			'disable_comments'     => 0,
+			'disable_wp_cron'      => 0,
 			'block_external_http'  => 0,
 			'block_privileged_signup' => 0,
 		);
@@ -133,6 +134,13 @@ class MVN_Hardening {
 			add_filter( 'feed_links_show_comments_feed', '__return_false' );
 		}
 
+		if ( ! empty( $s['disable_wp_cron'] ) ) {
+			if ( ! defined( 'DISABLE_WP_CRON' ) ) {
+				define( 'DISABLE_WP_CRON', true );
+			}
+			add_action( 'init', array( $this, 'block_wp_cron_request' ), 0 );
+		}
+
 		if ( ! empty( $s['block_privileged_signup'] ) ) {
 			add_filter( 'pre_option_default_role', array( $this, 'safe_default_role' ) );
 			add_action( 'user_register', array( $this, 'guard_new_user_roles' ), 1 );
@@ -166,6 +174,25 @@ class MVN_Hardening {
 			status_header( 403 );
 			header( 'Content-Type: text/plain; charset=UTF-8' );
 			echo 'XML-RPC is disabled.';
+			exit;
+		}
+	}
+
+	/**
+	 * Block direct HTTP hits to wp-cron.php when cron is disabled.
+	 */
+	public function block_wp_cron_request() {
+		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
+			status_header( 403 );
+			header( 'Content-Type: text/plain; charset=UTF-8' );
+			echo 'WP-Cron is disabled.';
+			exit;
+		}
+		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : '';
+		if ( false !== stripos( $uri, 'wp-cron.php' ) ) {
+			status_header( 403 );
+			header( 'Content-Type: text/plain; charset=UTF-8' );
+			echo 'WP-Cron is disabled.';
 			exit;
 		}
 	}
