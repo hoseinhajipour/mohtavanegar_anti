@@ -401,7 +401,7 @@ function mvn_security_checklist( $ctx = array() ) {
 			'id'     => 'block_external_http',
 			'title'  => 'مسدودسازی HTTP خارجی',
 			'desc'   => ! empty( $hard['block_external_http'] ) || ( defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL )
-				? 'WP_HTTP_BLOCK_EXTERNAL فعال است'
+				? 'درخواست‌های خروجی مسدودند (با امکان استثنا در مدیریت HTTP)'
 				: 'درخواست‌های خارجی هنوز مجازند (اختیاری)',
 			'done'   => ! empty( $hard['block_external_http'] ) || ( defined( 'WP_HTTP_BLOCK_EXTERNAL' ) && WP_HTTP_BLOCK_EXTERNAL ),
 			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),

@@ -1053,6 +1053,9 @@
       'disable_app_passwords',
       'remove_really_simple',
       'secure_headers',
+      'disable_comments',
+      'block_external_http',
+      'block_privileged_signup',
       'login_max_attempts',
       'login_lockout_minutes',
     ];
@@ -1069,6 +1072,9 @@
       .done(function (res) {
         if (res && res.success) {
           notice($('#mvn-hardening-result'), res.data.message, true);
+          if (res.data.http_guard) {
+            renderHttpGuard(res.data.http_guard);
+          }
         } else {
           notice($('#mvn-hardening-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
         }
@@ -1076,6 +1082,171 @@
       .fail(function () {
         notice($('#mvn-hardening-result'), 'خطای ارتباط', false);
       });
+  });
+
+  /* ---------- Outbound HTTP guard ---------- */
+  function httpNotice(msg, ok) {
+    notice($('#mvn-http-result'), msg, ok !== false);
+  }
+
+  function renderHttpGuard(data) {
+    if (!data) {
+      return;
+    }
+    var entries = data.entries || [];
+    var $tbody = $('#mvn-http-tbody');
+    var $table = $('#mvn-http-table');
+    var $empty = $('#mvn-http-empty');
+    $tbody.empty();
+
+    $('#mvn-http-meta').text(
+      entries.length +
+        ' دامنه ثبت‌شده · ' +
+        (data.blocked_hosts || []).length +
+        ' مسدود · ' +
+        (data.allowed_hosts || []).length +
+        ' مجاز (استثنا)'
+    );
+
+    if (!entries.length) {
+      $table.hide();
+      $empty.show();
+      return;
+    }
+    $empty.hide();
+    $table.show();
+
+    entries.forEach(function (row) {
+      var host = row.host || '';
+      var status = row.status || 'allowed';
+      var badge;
+      var action;
+      if (status === 'blocked') {
+        badge = '<span class="mvn-badge mvn-badge-critical">مسدود</span>';
+        action =
+          '<button type="button" class="button button-small mvn-http-unblock" data-host="' +
+          escAttr(host) +
+          '">آنبلاک</button>';
+      } else if (status === 'local') {
+        badge = '<span class="mvn-badge mvn-badge-info">محلی</span>';
+        action = '<span class="mvn-muted">—</span>';
+      } else {
+        badge = '<span class="mvn-badge mvn-badge-info">مجاز</span>';
+        action =
+          '<button type="button" class="button button-small button-link-delete mvn-http-block" data-host="' +
+          escAttr(host) +
+          '">بلاک</button>';
+      }
+      var tr =
+        '<tr data-host="' +
+        escAttr(host) +
+        '">' +
+        '<td dir="ltr"><code>' +
+        escHtml(host) +
+        '</code></td>' +
+        '<td>' +
+        badge +
+        '</td>' +
+        '<td>' +
+        (row.count || 0) +
+        '</td>' +
+        '<td>' +
+        escHtml(row.last_seen_human || '') +
+        '</td>' +
+        '<td class="mvn-path" dir="ltr"><code>' +
+        escHtml(row.last_url || '') +
+        '</code></td>' +
+        '<td class="mvn-actions-cell">' +
+        action +
+        '</td>' +
+        '</tr>';
+      $tbody.append(tr);
+    });
+  }
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function escAttr(s) {
+    return escHtml(s).replace(/'/g, '&#39;');
+  }
+
+  function httpAction(action, extra) {
+    var payload = extra || {};
+    return post(action, payload).done(function (res) {
+      if (res && res.success) {
+        httpNotice(res.data.message, true);
+        if (res.data.http_guard) {
+          renderHttpGuard(res.data.http_guard);
+        }
+      } else {
+        httpNotice((res && res.data && res.data.message) || MVN.i18n.error, false);
+      }
+    }).fail(function () {
+      httpNotice('خطای ارتباط', false);
+    });
+  }
+
+  $('#mvn-http-refresh').on('click', function () {
+    httpAction('mvn_http_guard_list');
+  });
+
+  $('#mvn-http-clear').on('click', function () {
+    if (!window.confirm('لاگ درخواست‌های خروجی پاک شود؟ (فهرست بلاک/آنبلاک نگه داشته می‌شود)')) {
+      return;
+    }
+    httpAction('mvn_http_guard_clear');
+  });
+
+  $('#mvn-http-add').on('click', function () {
+    var host = $.trim($('#mvn-http-add-host').val() || '');
+    if (!host) {
+      httpNotice('دامنه را وارد کنید.', false);
+      return;
+    }
+    httpAction('mvn_http_guard_add', { host: host, block: 0 }).done(function (res) {
+      if (res && res.success) {
+        $('#mvn-http-add-host').val('');
+      }
+    });
+  });
+
+  $('#mvn-http-add-block').on('click', function () {
+    var host = $.trim($('#mvn-http-add-host').val() || '');
+    if (!host) {
+      httpNotice('دامنه را وارد کنید.', false);
+      return;
+    }
+    httpAction('mvn_http_guard_add', { host: host, block: 1 }).done(function (res) {
+      if (res && res.success) {
+        $('#mvn-http-add-host').val('');
+      }
+    });
+  });
+
+  $(document).on('click', '.mvn-http-block', function (e) {
+    e.preventDefault();
+    var host = $(this).attr('data-host') || $(this).data('host');
+    if (!host) {
+      httpNotice('دامنه نامعتبر است.', false);
+      return;
+    }
+    httpAction('mvn_http_guard_block', { host: String(host) });
+  });
+
+  $(document).on('click', '.mvn-http-unblock', function (e) {
+    e.preventDefault();
+    var host = $(this).attr('data-host') || $(this).data('host');
+    if (!host) {
+      httpNotice('دامنه نامعتبر است.', false);
+      return;
+    }
+    httpAction('mvn_http_guard_unblock', { host: String(host) });
   });
 
   /* ---------- Quarantine ---------- */

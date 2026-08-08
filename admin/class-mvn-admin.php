@@ -55,6 +55,11 @@ class MVN_Admin {
 			'mvn_perms_start',
 			'mvn_perms_tick',
 			'mvn_hardening_save',
+			'mvn_http_guard_list',
+			'mvn_http_guard_block',
+			'mvn_http_guard_unblock',
+			'mvn_http_guard_add',
+			'mvn_http_guard_clear',
 			'mvn_quarantine_restore',
 			'mvn_quarantine_purge',
 			'mvn_quarantine_batch',
@@ -264,7 +269,8 @@ class MVN_Admin {
 		$this->render(
 			'hardening',
 			array(
-				'settings' => MVN_Hardening::instance()->settings(),
+				'settings'   => MVN_Hardening::instance()->settings(),
+				'http_guard' => MVN_Http_Guard::admin_payload(),
 			)
 		);
 	}
@@ -753,7 +759,80 @@ class MVN_Admin {
 			$raw = array();
 		}
 		$saved = MVN_Hardening::instance()->save( $raw );
-		wp_send_json_success( array( 'message' => 'تنظیمات ذخیره شد.', 'settings' => $saved ) );
+		wp_send_json_success(
+			array(
+				'message'    => 'تنظیمات ذخیره شد.',
+				'settings'   => $saved,
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
+	}
+
+	public function ajax_http_guard_list() {
+		$this->guard();
+		wp_send_json_success(
+			array(
+				'message'    => 'فهرست بروزرسانی شد.',
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
+	}
+
+	public function ajax_http_guard_block() {
+		$this->guard();
+		$host = isset( $_POST['host'] ) ? sanitize_text_field( wp_unslash( $_POST['host'] ) ) : '';
+		$r    = MVN_Http_Guard::block_host( $host );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success(
+			array(
+				'message'    => 'دامنه مسدود شد.',
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
+	}
+
+	public function ajax_http_guard_unblock() {
+		$this->guard();
+		$host = isset( $_POST['host'] ) ? sanitize_text_field( wp_unslash( $_POST['host'] ) ) : '';
+		$r    = MVN_Http_Guard::unblock_host( $host );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success(
+			array(
+				'message'    => 'دامنه مجاز شد.',
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
+	}
+
+	public function ajax_http_guard_add() {
+		$this->guard();
+		$host  = isset( $_POST['host'] ) ? sanitize_text_field( wp_unslash( $_POST['host'] ) ) : '';
+		$block = ! empty( $_POST['block'] );
+		$r     = MVN_Http_Guard::add_host( $host, $block );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success(
+			array(
+				'message'    => $block ? 'دامنه اضافه و مسدود شد.' : 'دامنه به فهرست اضافه شد.',
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
+	}
+
+	public function ajax_http_guard_clear() {
+		$this->guard();
+		MVN_Http_Guard::clear_log();
+		wp_send_json_success(
+			array(
+				'message'    => 'لاگ درخواست‌ها پاک شد.',
+				'http_guard' => MVN_Http_Guard::admin_payload(),
+			)
+		);
 	}
 
 	public function ajax_quarantine_restore() {

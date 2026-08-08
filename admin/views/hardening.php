@@ -92,8 +92,8 @@ $s = $settings;
 				<th>مسدودسازی HTTP خارجی</th>
 				<td>
 					<label><input type="checkbox" name="settings[block_external_http]" value="1" <?php checked( ! empty( $s['block_external_http'] ) ); ?>>
-					<code>WP_HTTP_BLOCK_EXTERNAL</code> — قطع درخواست‌های HTTP به دامنه‌های خارجی</label>
-					<p class="description" style="margin-top:6px">سخت‌گیرانه است: آپدیت هسته/افزونه، API وردپرس.ارگ و سرویس‌های خارجی قطع می‌شوند. در صورت نیاز می‌توانید در <code>wp-config.php</code> با <code>WP_ACCESSIBLE_HOSTS</code> استثنا تعریف کنید.</p>
+					قطع همه درخواست‌های HTTP از سرور به دامنه‌های خارجی</label>
+					<p class="description" style="margin-top:6px">سخت‌گیرانه است: آپدیت هسته/افزونه و سرویس‌های خارجی قطع می‌شوند. برای اجازه یا مسدود کردن دامنه‌های خاص، بخش «مدیریت درخواست‌های خروجی» پایین همین صفحه را ببینید.</p>
 				</td>
 			</tr>
 			<tr>
@@ -111,4 +111,99 @@ $s = $settings;
 			<span id="mvn-hardening-result" style="margin-right:12px"></span>
 		</p>
 	</form>
+</div>
+
+<?php
+$hg           = isset( $http_guard ) && is_array( $http_guard ) ? $http_guard : array();
+$hg_entries   = isset( $hg['entries'] ) && is_array( $hg['entries'] ) ? $hg['entries'] : array();
+$hg_global    = ! empty( $hg['global_block'] );
+$hg_blocked_n = isset( $hg['blocked_hosts'] ) && is_array( $hg['blocked_hosts'] ) ? count( $hg['blocked_hosts'] ) : 0;
+$hg_allowed_n = isset( $hg['allowed_hosts'] ) && is_array( $hg['allowed_hosts'] ) ? count( $hg['allowed_hosts'] ) : 0;
+?>
+<div class="mvn-card" id="mvn-http-guard">
+	<h2>مدیریت درخواست‌های خروجی (HTTP)</h2>
+	<p>
+		درخواست‌هایی که از داخل سرور به بیرون می‌روند اینجا ثبت می‌شوند.
+		می‌توانید هر دامنه را جداگانه <strong>مسدود</strong> یا <strong>مجاز</strong> کنید.
+		<?php if ( $hg_global ) : ?>
+			<br><span class="mvn-badge mvn-badge-warning">مسدودسازی سراسری فعال است</span>
+			<span class="mvn-muted">— همه دامنه‌های خارجی بسته هستند مگر آن‌هایی که آنبلاک کرده باشید.</span>
+		<?php else : ?>
+			<br><span class="mvn-muted">مسدودسازی سراسری خاموش است — فقط دامنه‌هایی که بلاک کرده باشید قطع می‌شوند.</span>
+		<?php endif; ?>
+	</p>
+
+	<div class="mvn-actions" style="margin-bottom:14px;flex-wrap:wrap;gap:8px">
+		<button type="button" class="button" id="mvn-http-refresh">بروزرسانی فهرست</button>
+		<button type="button" class="button" id="mvn-http-clear">پاک کردن لاگ</button>
+		<span class="mvn-muted" id="mvn-http-meta">
+			<?php
+			echo esc_html(
+				sprintf(
+					'%d دامنه ثبت‌شده · %d مسدود · %d مجاز (استثنا)',
+					count( $hg_entries ),
+					$hg_blocked_n,
+					$hg_allowed_n
+				)
+			);
+			?>
+		</span>
+		<span id="mvn-http-result" style="margin-right:8px"></span>
+	</div>
+
+	<div class="mvn-form-row" style="margin-bottom:16px">
+		<label for="mvn-http-add-host">افزودن دامنه دستی</label>
+		<input type="text" id="mvn-http-add-host" class="regular-text" placeholder="example.com" dir="ltr">
+		<button type="button" class="button" id="mvn-http-add">افزودن</button>
+		<button type="button" class="button" id="mvn-http-add-block">افزودن و مسدود</button>
+	</div>
+
+	<div id="mvn-http-empty" class="mvn-empty" <?php echo $hg_entries ? 'style="display:none"' : ''; ?>>
+		هنوز درخواستی ثبت نشده. پس از فعالیت سایت (آپدیت، API افزونه‌ها و …) دامنه‌ها اینجا ظاهر می‌شوند.
+	</div>
+
+	<table class="widefat striped mvn-table" id="mvn-http-table" <?php echo $hg_entries ? '' : 'style="display:none"'; ?>>
+		<thead>
+			<tr>
+				<th>دامنه</th>
+				<th>وضعیت</th>
+				<th>تعداد</th>
+				<th>آخرین درخواست</th>
+				<th>آخرین URL</th>
+				<th></th>
+			</tr>
+		</thead>
+		<tbody id="mvn-http-tbody">
+			<?php foreach ( $hg_entries as $row ) : ?>
+				<?php
+				$host   = isset( $row['host'] ) ? (string) $row['host'] : '';
+				$status = isset( $row['status'] ) ? (string) $row['status'] : 'allowed';
+				?>
+				<tr data-host="<?php echo esc_attr( $host ); ?>">
+					<td dir="ltr"><code><?php echo esc_html( $host ); ?></code></td>
+					<td>
+						<?php if ( 'blocked' === $status ) : ?>
+							<span class="mvn-badge mvn-badge-critical">مسدود</span>
+						<?php elseif ( 'local' === $status ) : ?>
+							<span class="mvn-badge mvn-badge-info">محلی</span>
+						<?php else : ?>
+							<span class="mvn-badge mvn-badge-info">مجاز</span>
+						<?php endif; ?>
+					</td>
+					<td><?php echo (int) ( isset( $row['count'] ) ? $row['count'] : 0 ); ?></td>
+					<td><?php echo esc_html( isset( $row['last_seen_human'] ) ? $row['last_seen_human'] : '' ); ?></td>
+					<td class="mvn-path" dir="ltr"><code><?php echo esc_html( isset( $row['last_url'] ) ? $row['last_url'] : '' ); ?></code></td>
+					<td class="mvn-actions-cell">
+						<?php if ( 'blocked' === $status ) : ?>
+							<button type="button" class="button button-small mvn-http-unblock" data-host="<?php echo esc_attr( $host ); ?>">آنبلاک</button>
+						<?php elseif ( 'local' !== $status ) : ?>
+							<button type="button" class="button button-small button-link-delete mvn-http-block" data-host="<?php echo esc_attr( $host ); ?>">بلاک</button>
+						<?php else : ?>
+							<span class="mvn-muted">—</span>
+						<?php endif; ?>
+					</td>
+				</tr>
+			<?php endforeach; ?>
+		</tbody>
+	</table>
 </div>

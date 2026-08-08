@@ -84,9 +84,8 @@ class MVN_Hardening {
 			define( 'DISALLOW_FILE_MODS', true );
 		}
 
-		if ( ! empty( $s['block_external_http'] ) && ! defined( 'WP_HTTP_BLOCK_EXTERNAL' ) ) {
-			define( 'WP_HTTP_BLOCK_EXTERNAL', true );
-		}
+		// Outbound HTTP blocking is handled by MVN_Http_Guard (selective block/allow).
+		// Do not define WP_HTTP_BLOCK_EXTERNAL here — it would bypass the allowlist UI.
 
 		if ( ! empty( $s['hide_wp_version'] ) ) {
 			remove_action( 'wp_head', 'wp_generator' );
