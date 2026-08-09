@@ -121,7 +121,11 @@ function mvn_db_chunk_size() {
 }
 
 function mvn_db_sub_phases() {
-	return array( 'options', 'posts', 'postmeta', 'users', 'usermeta' );
+	$phases = array( 'options', 'posts', 'postmeta', 'comments', 'commentmeta', 'termmeta', 'users', 'usermeta' );
+	if ( is_multisite() ) {
+		$phases[] = 'sitemeta';
+	}
+	return $phases;
 }
 
 /**

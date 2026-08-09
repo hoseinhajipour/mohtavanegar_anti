@@ -42,6 +42,10 @@ class MVN_Hardening {
 			'disable_wp_cron'      => 0,
 			'block_external_http'  => 0,
 			'block_privileged_signup' => 0,
+			'protect_uploads_execution' => 1,
+			'audit_security_events'  => 1,
+			'revoke_sessions_on_incident' => 0,
+			'trusted_proxies'        => '',
 		);
 	}
 
@@ -57,7 +61,11 @@ class MVN_Hardening {
 		$defaults = self::defaults();
 		$out      = array();
 		foreach ( $defaults as $key => $def ) {
-			if ( in_array( $key, array( 'login_max_attempts', 'login_lockout_minutes' ), true ) ) {
+			if ( 'trusted_proxies' === $key ) {
+				$values = isset( $input[ $key ] ) ? explode( ',', (string) $input[ $key ] ) : array();
+				$values = array_filter( array_map( 'trim', $values ), static function ( $ip ) { return (bool) filter_var( $ip, FILTER_VALIDATE_IP ); } );
+				$out[ $key ] = implode( ',', array_unique( $values ) );
+			} elseif ( in_array( $key, array( 'login_max_attempts', 'login_lockout_minutes' ), true ) ) {
 				$out[ $key ] = isset( $input[ $key ] ) ? max( 1, (int) $input[ $key ] ) : $def;
 			} else {
 				$out[ $key ] = empty( $input[ $key ] ) ? 0 : 1;
@@ -151,6 +159,16 @@ class MVN_Hardening {
 			add_filter( 'user_profile_update_errors', array( $this, 'block_privileged_user_create_errors' ), 10, 3 );
 			add_filter( 'rest_pre_insert_user', array( $this, 'block_privileged_rest_user' ), 10, 2 );
 		}
+		if ( ! empty( $s['protect_uploads_execution'] ) ) {
+			add_action( 'admin_init', array( $this, 'protect_uploads_execution' ) );
+		}
+		if ( ! empty( $s['audit_security_events'] ) ) {
+			add_action( 'activated_plugin', array( $this, 'audit_plugin_activation' ), 10, 2 );
+			add_action( 'upgrader_process_complete', array( $this, 'audit_plugin_install' ), 10, 2 );
+			add_action( 'set_user_role', array( $this, 'audit_role_change' ), 20, 3 );
+			add_action( 'wp_create_application_password', array( $this, 'audit_application_password' ), 10, 2 );
+			add_action( 'wp_delete_application_password', array( $this, 'audit_application_password_delete' ), 10, 2 );
+		}
 	}
 
 	public function disable_xmlrpc_class( $class ) {
@@ -225,31 +243,37 @@ class MVN_Hardening {
 
 	/* ---------- Brute-force ---------- */
 
-	private function lockout_key( $ip ) {
-		return 'mvn_lock_' . md5( $ip );
+	private function login_key( $ip, $username ) {
+		return hash_hmac( 'sha256', $ip . '|' . strtolower( trim( (string) $username ) ), wp_salt( 'auth' ) );
 	}
 
-	private function attempts_key( $ip ) {
-		return 'mvn_att_' . md5( $ip );
+	private function lockout_key( $ip, $username ) {
+		return 'mvn_lock_' . substr( $this->login_key( $ip, $username ), 0, 32 );
+	}
+
+	private function attempts_key( $ip, $username ) {
+		return 'mvn_att_' . substr( $this->login_key( $ip, $username ), 0, 32 );
 	}
 
 	public function on_login_failed( $username ) {
 		$s   = $this->settings();
 		$ip  = mvn_get_ip();
-		$key = $this->attempts_key( $ip );
+		$key = $this->attempts_key( $ip, $username );
 		$n   = (int) get_transient( $key );
 		$n++;
 		$window = max( 5, (int) $s['login_lockout_minutes'] ) * MINUTE_IN_SECONDS;
 		set_transient( $key, $n, $window );
 		if ( $n >= (int) $s['login_max_attempts'] ) {
-			set_transient( $this->lockout_key( $ip ), time() + $window, $window );
-			mvn_log( "Login lockout for IP {$ip} after {$n} failures (user={$username})" );
+			$multiplier = min( 16, (int) pow( 2, floor( $n / max( 1, (int) $s['login_max_attempts'] ) ) - 1 ) );
+			$backoff = $window * max( 1, $multiplier );
+			set_transient( $this->lockout_key( $ip, $username ), time() + $backoff, $backoff );
+			MVN_Audit_Log::record( 'login_lockout', '', '', 'blocked', array( 'identity_hash' => $this->login_key( $ip, $username ), 'attempts' => $n ) );
 		}
 	}
 
 	public function check_lockout( $user, $username, $password ) {
 		$ip = mvn_get_ip();
-		$until = get_transient( $this->lockout_key( $ip ) );
+		$until = get_transient( $this->lockout_key( $ip, $username ) );
 		if ( $until ) {
 			$mins = max( 1, (int) ceil( ( (int) $until - time() ) / 60 ) );
 			return new WP_Error(
@@ -266,8 +290,8 @@ class MVN_Hardening {
 
 	public function on_login_success( $user_login, $user ) {
 		$ip = mvn_get_ip();
-		delete_transient( $this->attempts_key( $ip ) );
-		delete_transient( $this->lockout_key( $ip ) );
+		delete_transient( $this->attempts_key( $ip, $user_login ) );
+		delete_transient( $this->lockout_key( $ip, $user_login ) );
 	}
 
 	public function send_secure_headers() {
@@ -497,6 +521,76 @@ class MVN_Hardening {
 			}
 		}
 		return $prepared_user;
+	}
+
+	public function protect_uploads_execution() {
+		$uploads = wp_upload_dir( null, false );
+		if ( empty( $uploads['basedir'] ) || ! is_dir( $uploads['basedir'] ) ) {
+			return;
+		}
+		$dir = $uploads['basedir'];
+		$ht  = $dir . '/.htaccess';
+		$marker = "# BEGIN MVN NO PHP\n<FilesMatch \"\\.(?:php[0-9]?|phtml|pht|phar)$\">\nRequire all denied\n</FilesMatch>\nRemoveHandler .php .phtml .pht .phar\nRemoveType .php .phtml .pht .phar\n# END MVN NO PHP\n";
+		$current = is_file( $ht ) ? (string) @file_get_contents( $ht ) : '';
+		if ( false === strpos( $current, 'BEGIN MVN NO PHP' ) ) {
+			mvn_atomic_write( $ht, rtrim( $current ) . "\n" . $marker, 0644 );
+		}
+		$web_config = $dir . '/web.config';
+		if ( ! is_file( $web_config ) ) {
+			$xml = '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><handlers><remove name="PHP_via_FastCGI"/><add name="MVN_Block_PHP" path="*.php" verb="*" modules="IsapiModule" scriptProcessor="" resourceType="File" requireAccess="None"/></handlers><security><requestFiltering><fileExtensions><add fileExtension=".php" allowed="false"/><add fileExtension=".phtml" allowed="false"/></fileExtensions></requestFiltering></security></system.webServer></configuration>';
+			mvn_atomic_write( $web_config, $xml, 0644 );
+		}
+	}
+
+	public static function permission_audit() {
+		$paths = array( 'root' => ABSPATH, 'content' => WP_CONTENT_DIR, 'uploads' => wp_upload_dir( null, false )['basedir'] );
+		$out   = array();
+		foreach ( $paths as $name => $path ) {
+			$out[ $name ] = array(
+				'path' => $path,
+				'mode' => is_file( $path ) || is_dir( $path ) ? substr( sprintf( '%o', fileperms( $path ) ), -4 ) : '',
+				'owner' => function_exists( 'fileowner' ) && file_exists( $path ) ? @fileowner( $path ) : null,
+				'writable' => is_writable( $path ),
+			);
+		}
+		$out['nginx_guide'] = 'location ~* ^/wp-content/uploads/.*\\.(php[0-9]?|phtml|pht|phar)$ { deny all; }';
+		return $out;
+	}
+
+	public function audit_plugin_activation( $plugin, $network_wide ) {
+		MVN_Audit_Log::record( 'plugin_activated', '', '', 'ok', array( 'plugin' => $plugin, 'network' => (bool) $network_wide ) );
+	}
+
+	public function audit_plugin_install( $upgrader, $options ) {
+		if ( ! empty( $options['type'] ) && 'plugin' === $options['type'] ) {
+			MVN_Audit_Log::record( 'plugin_changed', '', '', 'ok', array( 'action' => isset( $options['action'] ) ? $options['action'] : '' ) );
+		}
+	}
+
+	public function audit_role_change( $user_id, $role, $old_roles ) {
+		MVN_Audit_Log::record( 'user_role_changed', $old_roles, array( $role ), 'ok', array( 'user_id' => (int) $user_id ) );
+	}
+
+	public function audit_application_password( $user_id, $item ) {
+		MVN_Audit_Log::record( 'application_password_added', '', '', 'ok', array( 'user_id' => (int) $user_id, 'name' => isset( $item['name'] ) ? $item['name'] : '' ) );
+	}
+
+	public function audit_application_password_delete( $user_id, $uuid ) {
+		MVN_Audit_Log::record( 'application_password_deleted', '', '', 'ok', array( 'user_id' => (int) $user_id ) );
+	}
+
+	public static function revoke_admin_sessions_after_incident() {
+		$settings = self::instance()->settings();
+		if ( empty( $settings['revoke_sessions_on_incident'] ) || ! class_exists( 'WP_Session_Tokens' ) ) {
+			return 0;
+		}
+		$count = 0;
+		foreach ( get_users( array( 'role' => 'administrator', 'fields' => 'ID' ) ) as $user_id ) {
+			WP_Session_Tokens::get_instance( $user_id )->destroy_all();
+			$count++;
+		}
+		MVN_Audit_Log::record( 'admin_sessions_revoked', '', '', 'ok', array( 'users' => $count ) );
+		return $count;
 	}
 }
 

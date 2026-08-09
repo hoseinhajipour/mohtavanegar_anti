@@ -242,7 +242,9 @@ class MVN_Dropin_Audit {
 			return false;
 		}
 		// Our temporary safe bootstrap — never flag.
-		if ( false !== strpos( $content, 'MVN Safe DB Bootstrap' ) ) {
+		if ( false !== strpos( $content, 'MVN Safe DB Bootstrap' )
+			|| false !== strpos( $content, 'MVN Safe Cache' )
+			|| false !== strpos( $content, 'MVN Safe Object Cache' ) ) {
 			return false;
 		}
 		// Companion hex shells in same folder strongly imply compromised db.php.

@@ -8,7 +8,8 @@
   function post(action, data, opts) {
     data = data || {};
     data.action = action;
-    data.nonce = MVN.nonce;
+    data.nonce =
+      MVN.nonces && MVN.nonces[action] ? MVN.nonces[action] : MVN.nonce;
     opts = opts || {};
     return $.ajax({
       url: MVN.ajax,
@@ -1188,7 +1189,7 @@
   $('#mvn-ghost-purge').on('click', function () {
     if (
       !window.confirm(
-        'پوشه/فایل‌های بدافزار + .user.ini + PHPهای hex در wp-content حذف شوند؟ (اگر قفل باشند rename می‌شوند)'
+        'پوشه/فایل‌های بدافزار + .user.ini + PHPهای hex + db.php مخرب حذف شوند؟ (چند پاس + shutdown)'
       )
     ) {
       return;
@@ -1198,12 +1199,15 @@
     post('mvn_ghost_purge')
       .done(function (res) {
         if (res && res.success) {
-          notice($('#mvn-ghost-purge-result'), res.data.message, !(res.data.result && res.data.result.errors && res.data.result.errors.length));
-          if (res.data.status) {
-            window.setTimeout(function () {
-              window.location.reload();
-            }, 1200);
-          }
+          var ok = !(res.data.result && res.data.result.errors && res.data.result.errors.length);
+          notice(
+            $('#mvn-ghost-purge-result'),
+            (res.data.message || '') + ' — در حال تأیید پس از رفرش…',
+            ok
+          );
+          window.setTimeout(function () {
+            window.location.reload();
+          }, 2800);
         } else {
           notice($('#mvn-ghost-purge-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
         }
@@ -1646,6 +1650,25 @@
       .fail(function () {
         $btn.prop('disabled', false);
         perfNotice('خطای ارتباط', false);
+      });
+  });
+
+  $('.mvn-repair-rollback').on('click', function () {
+    if (!window.confirm('تأیید دوم: عملیات rollback/release انجام شود؟')) return;
+    var $btn = $(this).prop('disabled', true);
+    var action = $btn.data('action');
+    post(action, {})
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        var msg =
+          (res && res.data && res.data.message) ||
+          (res && res.success ? 'انجام شد.' : 'عملیات ناموفق بود.');
+        notice($('#mvn-rollback-result'), msg, !!(res && res.success));
+        if (res && res.success) setTimeout(function () { location.reload(); }, 1200);
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        notice($('#mvn-rollback-result'), 'خطای ارتباط', false);
       });
   });
 })(jQuery);

@@ -11,8 +11,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Base data directory (outside plugin, survives plugin updates).
  */
 function mvn_data_dir() {
-	$dir = WP_CONTENT_DIR . '/mvn-data';
-	return apply_filters( 'mvn_data_dir', $dir );
+	if ( defined( 'MVN_DATA_DIR' ) ) {
+		$dir = MVN_DATA_DIR;
+	} else {
+		$outside = dirname( rtrim( ABSPATH, '/\\' ) ) . '/.mvn-data-' . substr( hash( 'sha256', ABSPATH ), 0, 12 );
+		$dir     = is_dir( $outside ) || is_writable( dirname( $outside ) ) ? $outside : WP_CONTENT_DIR . '/mvn-data';
+	}
+	return rtrim( apply_filters( 'mvn_data_dir', $dir ), '/\\' );
 }
 
 function mvn_ensure_data_dirs() {
@@ -24,13 +29,166 @@ function mvn_ensure_data_dirs() {
 			wp_mkdir_p( $dir );
 		}
 		if ( is_dir( $dir ) && ! file_exists( $dir . '/index.php' ) ) {
-			@file_put_contents( $dir . '/index.php', "<?php // Silence is golden.\n" );
+			mvn_atomic_write( $dir . '/index.php', "<?php // Silence is golden.\n", 0644 );
 		}
 	}
 	if ( is_dir( $base ) && ! file_exists( $base . '/.htaccess' ) ) {
-		@file_put_contents( $base . '/.htaccess', $ht );
+		mvn_atomic_write( $base . '/.htaccess', $ht, 0644 );
 	}
 	return $base;
+}
+
+/**
+ * Normalize filesystem separators without resolving symlinks.
+ *
+ * @param string $path Filesystem path.
+ * @return string
+ */
+function mvn_normalize_path( $path ) {
+	$path = str_replace( '\\', '/', (string) $path );
+	$path = preg_replace( '#/+#', '/', $path );
+	return rtrim( (string) $path, '/' );
+}
+
+/**
+ * Whether a path is inside an allowed root (case-insensitive on Windows).
+ *
+ * @param string $path Path to test.
+ * @param string $root Allowed root.
+ * @return bool
+ */
+function mvn_path_is_within( $path, $root ) {
+	$path = mvn_normalize_path( $path );
+	$root = mvn_normalize_path( $root );
+	if ( '' === $path || '' === $root ) {
+		return false;
+	}
+	if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
+		$path = strtolower( $path );
+		$root = strtolower( $root );
+	}
+	return $path === $root || 0 === strpos( $path, $root . '/' );
+}
+
+/**
+ * Validate an absolute write target, including symlinked parent directories.
+ *
+ * @param string $path Absolute target path.
+ * @return string|false Normalized safe path.
+ */
+function mvn_safe_write_path( $path ) {
+	$path = mvn_normalize_path( $path );
+	if ( '' === $path || false !== strpos( $path, "\0" ) || is_link( $path ) ) {
+		return false;
+	}
+	$roots = array_unique(
+		array_filter(
+			array(
+				defined( 'ABSPATH' ) ? ABSPATH : '',
+				defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR : '',
+				function_exists( 'mvn_data_dir' ) ? mvn_data_dir() : '',
+			)
+		)
+	);
+	$lexical_ok = false;
+	foreach ( $roots as $root ) {
+		if ( mvn_path_is_within( $path, $root ) ) {
+			$lexical_ok = true;
+			break;
+		}
+	}
+	if ( ! $lexical_ok ) {
+		return false;
+	}
+
+	// Resolve the nearest existing parent to prevent writes through a symlink escape.
+	$parent = is_dir( $path ) ? $path : dirname( $path );
+	while ( ! is_dir( $parent ) && dirname( $parent ) !== $parent ) {
+		$parent = dirname( $parent );
+	}
+	$real_parent = @realpath( $parent );
+	if ( false === $real_parent ) {
+		return false;
+	}
+	foreach ( $roots as $root ) {
+		$real_root = @realpath( $root );
+		if ( false !== $real_root && mvn_path_is_within( $real_parent, $real_root ) ) {
+			return $path;
+		}
+	}
+	return false;
+}
+
+/**
+ * Atomically write a file in the same directory (temp + fsync/rename).
+ *
+ * @param string $path Absolute destination.
+ * @param string $data Bytes.
+ * @param int    $mode File mode.
+ * @return bool
+ */
+function mvn_atomic_write( $path, $data, $mode = 0644 ) {
+	$path = mvn_safe_write_path( $path );
+	if ( false === $path || ! is_string( $data ) ) {
+		return false;
+	}
+	$dir = dirname( $path );
+	if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+		return false;
+	}
+	$tmp = @tempnam( $dir, '.mvn-' );
+	if ( false === $tmp ) {
+		return false;
+	}
+	$fh = @fopen( $tmp, 'wb' );
+	if ( false === $fh ) {
+		@unlink( $tmp );
+		return false;
+	}
+	$ok = @flock( $fh, LOCK_EX );
+	$len = strlen( $data );
+	$off = 0;
+	while ( $ok && $off < $len ) {
+		$written = @fwrite( $fh, substr( $data, $off ) );
+		if ( false === $written || 0 === $written ) {
+			$ok = false;
+			break;
+		}
+		$off += $written;
+	}
+	if ( $ok ) {
+		$ok = @fflush( $fh );
+		if ( $ok && function_exists( 'fsync' ) ) {
+			@fsync( $fh );
+		}
+	}
+	@flock( $fh, LOCK_UN );
+	@fclose( $fh );
+	@chmod( $tmp, $mode );
+	if ( ! $ok ) {
+		@unlink( $tmp );
+		return false;
+	}
+
+	if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY && file_exists( $path ) ) {
+		$old = $path . '.mvn-old-' . substr( md5( microtime( true ) . $path ), 0, 8 );
+		if ( ! @rename( $path, $old ) ) {
+			@unlink( $tmp );
+			return false;
+		}
+		if ( ! @rename( $tmp, $path ) ) {
+			@rename( $old, $path );
+			@unlink( $tmp );
+			return false;
+		}
+		@unlink( $old );
+		return true;
+	}
+	if ( @rename( $tmp, $path ) ) {
+		return true;
+	}
+	@unlink( $tmp );
+	return false;
 }
 
 /**
@@ -41,7 +199,14 @@ function mvn_state_read( $name, $default = array() ) {
 	if ( ! file_exists( $file ) ) {
 		return $default;
 	}
-	$raw  = @file_get_contents( $file );
+	$fh = @fopen( $file, 'rb' );
+	if ( false === $fh ) {
+		return $default;
+	}
+	@flock( $fh, LOCK_SH );
+	$raw = stream_get_contents( $fh );
+	@flock( $fh, LOCK_UN );
+	@fclose( $fh );
 	$data = json_decode( $raw, true );
 	return is_array( $data ) ? $data : $default;
 }
@@ -52,7 +217,8 @@ function mvn_state_read( $name, $default = array() ) {
 function mvn_state_write( $name, $data ) {
 	mvn_ensure_data_dirs();
 	$file = mvn_data_dir() . '/state/' . preg_replace( '/[^a-z0-9_\-]/i', '', $name ) . '.json';
-	return (bool) @file_put_contents( $file, wp_json_encode( $data ) );
+	$json = wp_json_encode( $data );
+	return is_string( $json ) && mvn_atomic_write( $file, $json, 0600 );
 }
 
 function mvn_state_delete( $name ) {
@@ -63,17 +229,77 @@ function mvn_state_delete( $name ) {
 }
 
 /**
+ * Cross-request job lock backed by an atomic option insert.
+ *
+ * @param string $name Lock name.
+ * @param int    $ttl  Lock lifetime.
+ * @return string|false Lock token.
+ */
+function mvn_job_lock_acquire( $name, $ttl = 300 ) {
+	$key   = 'mvn_lock_' . sanitize_key( $name );
+	$token = wp_generate_password( 24, false, false );
+	$value = array( 'token' => $token, 'expires' => time() + max( 30, (int) $ttl ) );
+	if ( add_option( $key, $value, '', false ) ) {
+		return $token;
+	}
+	$current = get_option( $key, array() );
+	if ( is_array( $current ) && ! empty( $current['expires'] ) && (int) $current['expires'] < time() ) {
+		delete_option( $key );
+		if ( add_option( $key, $value, '', false ) ) {
+			return $token;
+		}
+	}
+	return false;
+}
+
+/**
+ * Release a job lock only when the caller owns its token.
+ *
+ * @param string $name  Lock name.
+ * @param string $token Owner token.
+ * @return bool
+ */
+function mvn_job_lock_release( $name, $token ) {
+	$key     = 'mvn_lock_' . sanitize_key( $name );
+	$current = get_option( $key, array() );
+	if ( ! is_array( $current ) || empty( $current['token'] ) || ! hash_equals( (string) $current['token'], (string) $token ) ) {
+		return false;
+	}
+	return delete_option( $key );
+}
+
+/**
+ * Invalidate runtime caches after filesystem/option remediation.
+ *
+ * @param string[] $files Changed PHP files.
+ */
+function mvn_invalidate_runtime_caches( $files = array() ) {
+	foreach ( (array) $files as $file ) {
+		if ( function_exists( 'opcache_invalidate' ) && is_string( $file ) ) {
+			@opcache_invalidate( $file, true );
+		}
+	}
+	if ( function_exists( 'wp_cache_delete' ) ) {
+		wp_cache_delete( 'alloptions', 'options' );
+		wp_cache_delete( 'notoptions', 'options' );
+	}
+	if ( function_exists( 'wp_cache_flush_runtime' ) ) {
+		wp_cache_flush_runtime();
+	}
+}
+
+/**
  * Absolute path from a site-relative path, guarded against traversal.
  */
 function mvn_abs_path( $rel ) {
-	$rel  = ltrim( str_replace( '\\', '/', (string) $rel ), '/' );
-	$base = rtrim( str_replace( '\\', '/', ABSPATH ), '/' );
-	$path = $base . '/' . $rel;
-	// Block directory traversal.
-	if ( false !== strpos( $rel, '..' ) ) {
+	$rel = ltrim( str_replace( '\\', '/', (string) $rel ), '/' );
+	if ( '' === $rel || false !== strpos( $rel, '..' ) || false !== strpos( $rel, "\0" ) ) {
 		return false;
 	}
-	return $path;
+	if ( 0 === strpos( $rel, 'wp-content/' ) && defined( 'WP_CONTENT_DIR' ) ) {
+		return mvn_normalize_path( WP_CONTENT_DIR ) . '/' . substr( $rel, strlen( 'wp-content/' ) );
+	}
+	return mvn_normalize_path( ABSPATH ) . '/' . $rel;
 }
 
 /**
@@ -93,6 +319,15 @@ function mvn_rel_path( $abs ) {
  */
 function mvn_get_ip() {
 	$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? trim( (string) $_SERVER['REMOTE_ADDR'] ) : '';
+	$settings = get_option( MVN_OPTION_HARDENING, array() );
+	$trusted  = isset( $settings['trusted_proxies'] ) ? array_filter( array_map( 'trim', explode( ',', $settings['trusted_proxies'] ) ) ) : array();
+	if ( filter_var( $ip, FILTER_VALIDATE_IP ) && in_array( $ip, $trusted, true ) && ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+		$chain = array_map( 'trim', explode( ',', (string) $_SERVER['HTTP_X_FORWARDED_FOR'] ) );
+		$forwarded = reset( $chain );
+		if ( filter_var( $forwarded, FILTER_VALIDATE_IP ) ) {
+			$ip = $forwarded;
+		}
+	}
 	return filter_var( $ip, FILTER_VALIDATE_IP ) ? $ip : '0.0.0.0';
 }
 
@@ -195,9 +430,6 @@ function mvn_is_skippable_dir( $rel ) {
 	$rel = trim( str_replace( '\\', '/', $rel ), '/' );
 	$skip = array(
 		'wp-content/mvn-data',
-		'wp-content/cache',
-		'wp-content/upgrade',
-		'wp-content/uploads/cache',
 		'wp-content/wflogs',
 	);
 	foreach ( mvn_self_plugin_slugs() as $slug ) {
@@ -544,5 +776,45 @@ function mvn_list_files( $root_abs, $max = 200000 ) {
 		}
 	}
 	sort( $out );
+	return $out;
+}
+
+/**
+ * Inventory symlinks without following them.
+ *
+ * @param string[] $roots Absolute roots.
+ * @param int      $max   Safety cap.
+ * @return array[]
+ */
+function mvn_list_symlinks( $roots, $max = 2000 ) {
+	$out = array();
+	foreach ( (array) $roots as $root_abs ) {
+		$root_abs = rtrim( mvn_normalize_path( $root_abs ), '/' );
+		if ( ! is_dir( $root_abs ) ) {
+			continue;
+		}
+		$stack = array( $root_abs );
+		while ( $stack && count( $out ) < $max ) {
+			$dir = array_pop( $stack );
+			foreach ( @scandir( $dir ) ?: array() as $item ) {
+				if ( '.' === $item || '..' === $item ) {
+					continue;
+				}
+				$path = $dir . '/' . $item;
+				if ( is_link( $path ) ) {
+					$target = @realpath( $path );
+					$out[] = array(
+						'rel'     => mvn_rel_path( $path ),
+						'target'  => false === $target ? (string) @readlink( $path ) : mvn_normalize_path( $target ),
+						'outside' => false === $target || ! mvn_path_is_within( $target, $root_abs ),
+					);
+					continue;
+				}
+				if ( is_dir( $path ) && ! mvn_is_skippable_dir( mvn_rel_path( $path ) ) ) {
+					$stack[] = $path;
+				}
+			}
+		}
+	}
 	return $out;
 }

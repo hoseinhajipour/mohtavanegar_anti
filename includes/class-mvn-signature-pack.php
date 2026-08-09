@@ -12,6 +12,10 @@ class MVN_Signature_Pack {
 
 	const OPTION_META = 'mvn_sig_pack_meta';
 	const STATE_FILE  = 'signature_pack';
+	const MAX_BYTES   = 2097152;
+	const MAX_SIGS    = 1000;
+	const MAX_HASHES  = 10000;
+	const MAX_PATTERN = 2048;
 
 	/** @var array|null */
 	private static $cache = null;
@@ -96,8 +100,7 @@ class MVN_Signature_Pack {
 			if ( isset( $sig['enabled'] ) && ! $sig['enabled'] ) {
 				continue;
 			}
-			// Validate regex compiles.
-			if ( false === @preg_match( $sig['pattern'], '' ) && PREG_NO_ERROR !== preg_last_error() ) {
+			if ( ! self::regex_is_safe( $sig['pattern'] ) ) {
 				continue;
 			}
 			$out[] = array(
@@ -184,6 +187,9 @@ class MVN_Signature_Pack {
 	public static function update() {
 		$url = self::remote_url();
 		if ( $url ) {
+			if ( ! defined( 'MVN_SIGNATURE_PACK_PUBLIC_KEY' ) || ! MVN_SIGNATURE_PACK_PUBLIC_KEY ) {
+				return new WP_Error( 'remote_disabled', 'به‌روزرسانی remote بدون MVN_SIGNATURE_PACK_PUBLIC_KEY غیرفعال است.' );
+			}
 			return self::install_from_url( $url );
 		}
 		return self::install_from_bundled();
@@ -209,11 +215,18 @@ class MVN_Signature_Pack {
 		if ( ! $url ) {
 			return new WP_Error( 'bad_url', 'آدرس بسته امضا نامعتبر است.' );
 		}
-		$response = wp_remote_get(
+		if ( ! defined( 'MVN_SIGNATURE_PACK_PUBLIC_KEY' ) || ! MVN_SIGNATURE_PACK_PUBLIC_KEY ) {
+			return new WP_Error( 'missing_public_key', 'کلید عمومی Ed25519 تنظیم نشده است.' );
+		}
+		if ( ! defined( 'MVN_SIGNATURE_PACK_HOST' ) || strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) ) !== strtolower( MVN_SIGNATURE_PACK_HOST ) ) {
+			return new WP_Error( 'host_not_pinned', 'Host بسته امضا با MVN_SIGNATURE_PACK_HOST pin نشده است.' );
+		}
+		$response = MVN_URL_Trust::get(
 			$url,
 			array(
 				'timeout' => 60,
 				'headers' => array( 'Accept' => 'application/json' ),
+				'limit_response_size' => self::MAX_BYTES + 1,
 			)
 		);
 		if ( is_wp_error( $response ) ) {
@@ -226,6 +239,21 @@ class MVN_Signature_Pack {
 			self::save_meta( false, 'HTTP ' . $code );
 			return new WP_Error( 'http_fail', 'پاسخ سرور بسته امضا نامعتبر بود (HTTP ' . $code . ').' );
 		}
+		if ( strlen( $body ) > self::MAX_BYTES ) {
+			return new WP_Error( 'pack_too_large', 'حجم بسته امضا از سقف مجاز بیشتر است.' );
+		}
+		$sig_url = apply_filters( 'mvn_signature_pack_signature_url', $url . '.sig', $url );
+		$sig_res = MVN_URL_Trust::get(
+			$sig_url,
+			array( 'timeout' => 30, 'limit_response_size' => 512, 'headers' => array( 'Accept' => 'text/plain' ) )
+		);
+		if ( is_wp_error( $sig_res ) || 200 !== (int) wp_remote_retrieve_response_code( $sig_res ) ) {
+			return new WP_Error( 'signature_download_fail', 'دریافت detached signature ناموفق بود.' );
+		}
+		$verified = self::verify_ed25519( $body, trim( wp_remote_retrieve_body( $sig_res ) ) );
+		if ( is_wp_error( $verified ) ) {
+			return $verified;
+		}
 		return self::install_raw( $body, 'remote' );
 	}
 
@@ -233,6 +261,9 @@ class MVN_Signature_Pack {
 	 * Validate and write pack JSON into mvn-data/signatures/pack.json.
 	 */
 	private static function install_raw( $raw, $source ) {
+		if ( ! is_string( $raw ) || strlen( $raw ) > self::MAX_BYTES ) {
+			return new WP_Error( 'pack_too_large', 'حجم بسته امضا نامعتبر است.' );
+		}
 		$data = json_decode( $raw, true );
 		if ( ! is_array( $data ) || empty( $data['version'] ) ) {
 			return new WP_Error( 'bad_json', 'ساختار JSON بسته امضا نامعتبر است.' );
@@ -243,13 +274,28 @@ class MVN_Signature_Pack {
 		if ( ! isset( $data['hashes'] ) || ! is_array( $data['hashes'] ) ) {
 			$data['hashes'] = array();
 		}
+		if ( count( $data['signatures'] ) > self::MAX_SIGS || count( $data['hashes'] ) > self::MAX_HASHES ) {
+			return new WP_Error( 'pack_limits', 'تعداد امضا/هش از سقف ایمنی عبور کرده است.' );
+		}
+		if ( ! empty( $data['min_plugin'] ) && version_compare( MVN_VERSION, $data['min_plugin'], '<' ) ) {
+			return new WP_Error( 'plugin_too_old', 'این بسته به نسخه جدیدتر افزونه نیاز دارد.' );
+		}
+		if ( ! empty( $data['max_plugin'] ) && version_compare( MVN_VERSION, $data['max_plugin'], '>' ) ) {
+			return new WP_Error( 'plugin_too_new', 'این بسته با نسخه فعلی افزونه سازگار نیست.' );
+		}
+		if ( 'remote' === $source ) {
+			$current = self::load();
+			if ( ! empty( $current['version'] ) && version_compare( (string) $data['version'], (string) $current['version'], '<' ) ) {
+				return new WP_Error( 'rollback_blocked', 'نسخه قدیمی‌تر بسته امضا (anti-rollback) رد شد.' );
+			}
+		}
 
 		// Soft-validate: at least one usable entry OR empty pack allowed for wipe.
 		foreach ( $data['signatures'] as $sig ) {
 			if ( empty( $sig['id'] ) || empty( $sig['pattern'] ) ) {
 				continue;
 			}
-			if ( false === @preg_match( $sig['pattern'], '' ) && PREG_NO_ERROR !== preg_last_error() ) {
+			if ( ! self::regex_is_safe( $sig['pattern'] ) ) {
 				return new WP_Error( 'bad_regex', 'الگوی نامعتبر در امضا: ' . $sig['id'] );
 			}
 		}
@@ -260,17 +306,18 @@ class MVN_Signature_Pack {
 			wp_mkdir_p( $dir );
 		}
 		if ( ! file_exists( $dir . '/index.php' ) ) {
-			@file_put_contents( $dir . '/index.php', "<?php // Silence is golden.\n" );
+			mvn_atomic_write( $dir . '/index.php', "<?php // Silence is golden.\n", 0644 );
 		}
 		if ( ! file_exists( $dir . '/.htaccess' ) ) {
-			@file_put_contents(
+			mvn_atomic_write(
 				$dir . '/.htaccess',
-				"# BEGIN Mohtavanegar\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n# END Mohtavanegar\n"
+				"# BEGIN Mohtavanegar\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n# END Mohtavanegar\n",
+				0644
 			);
 		}
 
 		$json = wp_json_encode( $data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT );
-		$ok   = (bool) @file_put_contents( self::local_path(), $json );
+		$ok   = mvn_atomic_write( self::local_path(), $json, 0600 );
 		if ( ! $ok ) {
 			return new WP_Error( 'write_fail', 'نوشتن بسته امضا در mvn-data ناموفق بود.' );
 		}
@@ -286,6 +333,48 @@ class MVN_Signature_Pack {
 		self::save_meta( true, $msg );
 		mvn_log( 'Signature pack updated: ' . $msg );
 		return self::status();
+	}
+
+	/**
+	 * Reject costly/unbounded remote regexes before compilation.
+	 *
+	 * @param string $pattern PCRE pattern.
+	 * @return bool
+	 */
+	public static function regex_is_safe( $pattern ) {
+		if ( ! is_string( $pattern ) || '' === $pattern || strlen( $pattern ) > self::MAX_PATTERN ) {
+			return false;
+		}
+		if ( preg_match( '/\([^)]*[+*][^)]*\)[+*{]/', $pattern )
+			|| preg_match( '/(?:\.\*|\.\+){2,}/', $pattern )
+			|| preg_match( '/\(\?(?:R|0|&|P>)/', $pattern )
+			|| preg_match( '/\\\\[1-9][0-9]*/', $pattern ) ) {
+			return false;
+		}
+		return false !== @preg_match( $pattern, str_repeat( 'a', 256 ) );
+	}
+
+	/**
+	 * Verify a base64/hex detached Ed25519 signature.
+	 *
+	 * @param string $message Exact downloaded bytes.
+	 * @param string $encoded Signature.
+	 * @return true|WP_Error
+	 */
+	private static function verify_ed25519( $message, $encoded ) {
+		if ( ! function_exists( 'sodium_crypto_sign_verify_detached' ) ) {
+			return new WP_Error( 'sodium_required', 'برای امضای Ed25519 افزونه sodium لازم است.' );
+		}
+		$key_raw = (string) MVN_SIGNATURE_PACK_PUBLIC_KEY;
+		$key = ctype_xdigit( $key_raw ) ? @hex2bin( $key_raw ) : base64_decode( $key_raw, true );
+		$sig = ctype_xdigit( $encoded ) ? @hex2bin( $encoded ) : base64_decode( $encoded, true );
+		if ( ! is_string( $key ) || SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES !== strlen( $key )
+			|| ! is_string( $sig ) || SODIUM_CRYPTO_SIGN_BYTES !== strlen( $sig ) ) {
+			return new WP_Error( 'bad_signature_format', 'فرمت کلید یا detached signature نامعتبر است.' );
+		}
+		return sodium_crypto_sign_verify_detached( $sig, $message, $key )
+			? true
+			: new WP_Error( 'signature_invalid', 'امضای Ed25519 بسته امضا معتبر نیست.' );
 	}
 
 	private static function save_meta( $ok, $message ) {

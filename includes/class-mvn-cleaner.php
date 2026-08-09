@@ -62,10 +62,17 @@ class MVN_Cleaner {
 		$action = isset( $issue['action'] ) ? $issue['action'] : '';
 		$sig    = isset( $issue['sig'] ) ? $issue['sig'] : '';
 		$rel    = isset( $issue['rel'] ) ? str_replace( '\\', '/', (string) $issue['rel'] ) : '';
+		$confidence = self::issue_confidence( $issue );
 
 		// Known FPs are safe to dismiss (no site mutation).
 		if ( self::issue_is_known_false_positive( $issue ) ) {
 			return 'safe';
+		}
+		if ( $confidence < 65 ) {
+			return 'manual';
+		}
+		if ( $confidence < 95 ) {
+			return 'caution';
 		}
 
 		// Remap legacy/misclassified actions.
@@ -172,7 +179,56 @@ class MVN_Cleaner {
 	 * Whether this issue may run in "رفع امن" batch.
 	 */
 	public static function is_safe_auto_fix( $issue ) {
-		return 'safe' === self::risk_tier( $issue );
+		return self::issue_confidence( $issue ) >= 95
+			&& self::has_confirmed_evidence( $issue )
+			&& 'safe' === self::risk_tier( $issue );
+	}
+
+	/**
+	 * Normalize confidence for legacy findings.
+	 *
+	 * @param array $issue Finding.
+	 * @return int
+	 */
+	private static function issue_confidence( $issue ) {
+		if ( isset( $issue['confidence'] ) ) {
+			return max( 0, min( 100, (int) $issue['confidence'] ) );
+		}
+		return function_exists( 'mvn_compute_confidence' )
+			? mvn_compute_confidence(
+				isset( $issue['sig'] ) ? $issue['sig'] : '',
+				isset( $issue['severity'] ) ? $issue['severity'] : 'warning',
+				isset( $issue['rel'] ) ? $issue['rel'] : ''
+			)
+			: 0;
+	}
+
+	/**
+	 * Auto-fix requires an exact IoC/checksum or multiple independent engines.
+	 *
+	 * @param array $issue Finding.
+	 * @return bool
+	 */
+	private static function has_confirmed_evidence( $issue ) {
+		$sig = isset( $issue['sig'] ) ? $issue['sig'] : '';
+		$exact = array(
+			'known_malware_hash', 'known_malware_plugin', 'xdav_tracker_markers',
+			'zonal_runner_tap_markers', 'wpcontent_hex_php', 'wpcontent_hex_zip',
+			'user_ini_prepend', 'php_upload_in_uploads', 'polyglot_php_in_media',
+			'core_checksum_modified', 'core_checksum_missing', 'repo_checksum_modified',
+			'repo_checksum_missing', 'db_malware_tracker_option', 'db_malware_tracker_usermeta',
+		);
+		if ( in_array( $sig, $exact, true ) ) {
+			return true;
+		}
+		$evidence = isset( $issue['evidence'] ) && is_array( $issue['evidence'] ) ? $issue['evidence'] : array();
+		$engines  = array();
+		foreach ( $evidence as $item ) {
+			if ( is_array( $item ) && ! empty( $item['engine'] ) ) {
+				$engines[ $item['engine'] ] = true;
+			}
+		}
+		return count( $engines ) >= 2;
 	}
 
 	/**
@@ -361,12 +417,18 @@ class MVN_Cleaner {
 
 		$result = self::apply( $target );
 		if ( is_wp_error( $result ) ) {
+			MVN_Incidents::transition( $issue_id, 'failed', 'administrator', array( 'error' => $result->get_error_code() ) );
+			MVN_Audit_Log::record( 'remediation_failed', $target, '', $result->get_error_code(), array( 'issue_id' => $issue_id ) );
+			MVN_Notify::critical( array( 'id' => $issue_id, 'finding' => $target ), 'cleanup_failed' );
 			return $result;
 		}
+		$status = in_array( self::normalized_action( $target ), array( 'quarantine', 'quarantine_delete', 'delete_core_extra' ), true ) ? 'quarantined' : 'fixed';
+		MVN_Incidents::transition( $issue_id, $status, 'administrator' );
+		MVN_Audit_Log::record( 'remediation_applied', $target, array( 'status' => $status ), 'ok', array( 'issue_id' => $issue_id ) );
 
 		// Remove from stored issues.
 		array_splice( $issues, $idx, 1 );
-		update_option( MVN_OPTION_ISSUES, $issues, false );
+		MVN_Incidents::store_issues( $issues );
 
 		// Also update in-progress scan state if present.
 		$state = MVN_Scanner::get_state();
@@ -447,12 +509,19 @@ class MVN_Cleaner {
 				$failed++;
 				$errors[] = ( isset( $issue['rel'] ) ? $issue['rel'] : '?' ) . ': ' . $r->get_error_message();
 				$kept[]   = $issue;
+				if ( ! empty( $issue['id'] ) ) {
+					MVN_Incidents::transition( $issue['id'], 'failed', 'batch', array( 'error' => $r->get_error_code() ) );
+				}
 			} else {
 				$fixed++;
+				if ( ! empty( $issue['id'] ) ) {
+					$status = in_array( $action, array( 'quarantine', 'quarantine_delete', 'delete_core_extra' ), true ) ? 'quarantined' : 'fixed';
+					MVN_Incidents::transition( $issue['id'], $status, 'batch' );
+				}
 			}
 		}
 
-		update_option( MVN_OPTION_ISSUES, $kept, false );
+		MVN_Incidents::store_issues( $kept );
 		return array(
 			'fixed'     => $fixed,
 			'failed'    => $failed,
@@ -478,6 +547,9 @@ class MVN_Cleaner {
 		if ( self::issue_is_known_false_positive( $issue ) ) {
 			mvn_log( 'Dismissed known FP without mutation: ' . $rel . ' (' . ( isset( $issue['sig'] ) ? $issue['sig'] : '' ) . ')' );
 			return true;
+		}
+		if ( self::issue_confidence( $issue ) < 65 ) {
+			return new WP_Error( 'confidence_too_low', 'confidence کمتر از 65 است؛ طبق سیاست فقط گزارش/ignore مجاز است.' );
 		}
 
 		if ( 'db' === $source || 0 === strpos( $rel, 'db:' ) ) {
@@ -596,6 +668,7 @@ class MVN_Cleaner {
 		if ( ! @unlink( $abs ) ) {
 			return new WP_Error( 'unlink_fail', 'حذف فایل ناموفق بود (سطح دسترسی؟).' );
 		}
+		mvn_invalidate_runtime_caches( array( $abs ) );
 		mvn_log( "Deleted: {$rel} (quarantine={$id})" );
 		return true;
 	}
@@ -676,9 +749,17 @@ class MVN_Cleaner {
 			return new WP_Error( 'backup_fail', 'پشتیبان‌گیری قبل از پاکسازی ناموفق بود.' );
 		}
 
-		$ok = @file_put_contents( $abs, $cleaned );
-		if ( false === $ok ) {
+		$ok = mvn_atomic_write( $abs, $cleaned, 0644 );
+		if ( ! $ok ) {
 			return new WP_Error( 'write_fail', 'نوشتن فایل پاکسازی‌شده ناموفق بود.' );
+		}
+		mvn_invalidate_runtime_caches( array( $abs ) );
+		$sig = isset( $issue['sig'] ) ? $issue['sig'] : '';
+		foreach ( mvn_signatures() as $rule ) {
+			if ( $sig === $rule['id'] && ! empty( $rule['pattern'] ) && @preg_match( $rule['pattern'], $cleaned ) ) {
+				MVN_Quarantine::restore( $id, true );
+				return new WP_Error( 'verification_failed', 'پس از پاک‌سازی امضای تهدید باقی ماند؛ rollback خودکار انجام شد.' );
+			}
 		}
 		mvn_log( "Cleaned: {$rel} (hits={$hits}, backup={$id})" );
 		return true;

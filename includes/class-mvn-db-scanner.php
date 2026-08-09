@@ -21,6 +21,8 @@ class MVN_DB_Scanner {
 		$state['phase']           = 'db';
 		$state['db_phase']        = 'options';
 		$state['db_cursor']       = 0;
+		$state['db_last_id']      = 0;
+		$state['db_finished']     = 0;
 		$state['db_total']        = $total;
 		$state['db_processed']    = 0;
 		$state['db_counts']       = $counts;
@@ -47,30 +49,26 @@ class MVN_DB_Scanner {
 		$limit = mvn_db_chunk_size();
 		$sigs  = mvn_signatures();
 
-		$done_in_chunk = self::scan_sub_phase( $sub, (int) $state['db_cursor'], $limit, $sigs, $state );
-		$state['db_cursor']    += $done_in_chunk;
+		$done_in_chunk = self::scan_sub_phase( $sub, (int) $state['db_last_id'], $limit, $sigs, $state );
+		$state['db_cursor']     = (int) $state['db_last_id'];
 		$state['db_processed'] += $done_in_chunk;
 		$state['processed']     = (int) $state['db_processed'];
 		$state['cursor']        = (int) $state['db_cursor'];
 
-		$sub_total = isset( $state['db_counts'][ $sub ] ) ? (int) $state['db_counts'][ $sub ] : 0;
-		if ( $state['db_cursor'] >= $sub_total ) {
+		if ( $done_in_chunk < $limit ) {
 			$next = self::next_sub_phase( $sub );
 			if ( $next ) {
 				$state['db_phase']  = $next;
 				$state['db_cursor'] = 0;
+				$state['db_last_id'] = 0;
+			} else {
+				$state['db_finished'] = 1;
 			}
 		}
 	}
 
 	public static function is_done( $state ) {
-		$sub = isset( $state['db_phase'] ) ? $state['db_phase'] : '';
-		if ( 'usermeta' !== $sub ) {
-			return false;
-		}
-		$sub_total = isset( $state['db_counts']['usermeta'] ) ? (int) $state['db_counts']['usermeta'] : 0;
-		$cursor    = isset( $state['db_cursor'] ) ? (int) $state['db_cursor'] : 0;
-		return $cursor >= $sub_total;
+		return ! empty( $state['db_finished'] );
 	}
 
 	public static function sub_phase_label( $sub ) {
@@ -80,6 +78,10 @@ class MVN_DB_Scanner {
 			'postmeta' => 'postmeta (متای نوشته)',
 			'users'    => 'users (کاربران)',
 			'usermeta' => 'usermeta (متای کاربر)',
+			'comments' => 'comments (دیدگاه‌ها)',
+			'commentmeta' => 'commentmeta (متای دیدگاه)',
+			'termmeta' => 'termmeta (متای دسته/برچسب)',
+			'sitemeta' => 'sitemeta (تنظیمات شبکه)',
 		);
 		return isset( $labels[ $sub ] ) ? $labels[ $sub ] : $sub;
 	}
@@ -107,6 +109,9 @@ class MVN_DB_Scanner {
 		);
 
 		$postmeta = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->postmeta}" );
+		$comments = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->comments}" );
+		$commentmeta = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->commentmeta}" );
+		$termmeta = isset( $wpdb->termmeta ) ? (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->termmeta}" ) : 0;
 		$users    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->users}" );
 		$usermeta = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->usermeta}" );
 
@@ -114,12 +119,17 @@ class MVN_DB_Scanner {
 			'options'  => $options,
 			'posts'    => $posts,
 			'postmeta' => $postmeta,
+			'comments' => $comments,
+			'commentmeta' => $commentmeta,
+			'termmeta' => $termmeta,
 			'users'    => $users,
 			'usermeta' => $usermeta,
+			'sitemeta' => is_multisite() && isset( $wpdb->sitemeta ) ? (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->sitemeta}" ) : 0,
 		);
 	}
 
 	private static function scan_sub_phase( $sub, $cursor, $limit, $sigs, &$state ) {
+		global $wpdb;
 		switch ( $sub ) {
 			case 'options':
 				return self::scan_options( $cursor, $limit, $sigs, $state );
@@ -127,10 +137,18 @@ class MVN_DB_Scanner {
 				return self::scan_posts( $cursor, $limit, $sigs, $state );
 			case 'postmeta':
 				return self::scan_postmeta( $cursor, $limit, $sigs, $state );
+			case 'comments':
+				return self::scan_generic( 'comments', $wpdb->comments, 'comment_ID', array( 'comment_author', 'comment_author_email', 'comment_author_url', 'comment_content', 'comment_agent' ), $cursor, $limit, $sigs, $state );
+			case 'commentmeta':
+				return self::scan_generic( 'commentmeta', $wpdb->commentmeta, 'meta_id', array( 'comment_id', 'meta_key', 'meta_value' ), $cursor, $limit, $sigs, $state );
+			case 'termmeta':
+				return self::scan_generic( 'termmeta', $wpdb->termmeta, 'meta_id', array( 'term_id', 'meta_key', 'meta_value' ), $cursor, $limit, $sigs, $state );
 			case 'users':
 				return self::scan_users( $cursor, $limit, $sigs, $state );
 			case 'usermeta':
 				return self::scan_usermeta( $cursor, $limit, $sigs, $state );
+			case 'sitemeta':
+				return self::scan_generic( 'sitemeta', $wpdb->sitemeta, 'meta_id', array( 'site_id', 'meta_key', 'meta_value' ), $cursor, $limit, $sigs, $state );
 		}
 		return 0;
 	}
@@ -143,10 +161,11 @@ class MVN_DB_Scanner {
 				"SELECT option_id, option_name, option_value FROM {$wpdb->options}
 				WHERE option_name NOT LIKE '\_transient\_timeout\_%'
 				AND option_name NOT LIKE '\_site\_transient\_timeout\_%'
+				AND option_id > %d
 				ORDER BY option_id ASC
-				LIMIT %d OFFSET %d",
-				$limit,
-				$offset
+				LIMIT %d",
+				$offset,
+				$limit
 			),
 			ARRAY_A
 		);
@@ -156,6 +175,35 @@ class MVN_DB_Scanner {
 		}
 
 		foreach ( $rows as $row ) {
+			if ( 'cron' === $row['option_name'] ) {
+				$cron = maybe_unserialize( $row['option_value'] );
+				if ( is_array( $cron ) ) {
+					foreach ( $cron as $timestamp => $hooks ) {
+						if ( ! is_array( $hooks ) ) {
+							continue;
+						}
+						foreach ( $hooks as $hook => $events ) {
+							$blob = $hook . ' ' . wp_json_encode( $events );
+							if ( preg_match( '/zonal|xdav|security[-_]?helper|auto_prepend|[a-f0-9]{12,}\.php/i', $blob ) ) {
+								MVN_Scanner::add_finding(
+									$state,
+									array(
+										'source' => 'db', 'table' => 'options', 'row_id' => (int) $row['option_id'],
+										'column' => 'option_value', 'row_key' => 'cron/' . $hook,
+										'rel' => 'db:options:cron/' . $hook . ':option_value',
+										'sig' => 'db_cron_injection', 'label' => 'Cron hook/args مخرب',
+										'severity' => 'critical', 'detail' => 'Hook: ' . $hook . ' @ ' . $timestamp,
+										'action' => 'db_review', 'confidence' => 96,
+										'evidence' => array( array( 'engine' => 'db-cron', 'signal' => 'confirmed_ioc' ) ),
+									),
+									$blob,
+									md5( $blob )
+								);
+							}
+						}
+					}
+				}
+			}
 			if ( apply_filters( 'mvn_db_scan_skip_option', false, $row['option_name'], $row['option_value'], $row ) ) {
 				continue;
 			}
@@ -164,6 +212,7 @@ class MVN_DB_Scanner {
 			}
 			self::scan_row( 'options', $row, array( 'option_name', 'option_value' ), $sigs, $state );
 		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ]['option_id'];
 
 		return count( $rows );
 	}
@@ -176,10 +225,11 @@ class MVN_DB_Scanner {
 				"SELECT ID, post_title, post_content, post_excerpt, guid, post_type, post_status
 				FROM {$wpdb->posts}
 				WHERE post_status NOT IN ('trash','auto-draft')
+				AND ID > %d
 				ORDER BY ID ASC
-				LIMIT %d OFFSET %d",
-				$limit,
-				$offset
+				LIMIT %d",
+				$offset,
+				$limit
 			),
 			ARRAY_A
 		);
@@ -198,6 +248,7 @@ class MVN_DB_Scanner {
 				self::scan_row( 'posts', $row, array( 'post_title', 'post_content', 'post_excerpt', 'guid' ), $sigs, $state );
 			}
 		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ]['ID'];
 
 		return count( $rows );
 	}
@@ -208,10 +259,11 @@ class MVN_DB_Scanner {
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT meta_id, post_id, meta_key, meta_value FROM {$wpdb->postmeta}
+				WHERE meta_id > %d
 				ORDER BY meta_id ASC
-				LIMIT %d OFFSET %d",
-				$limit,
-				$offset
+				LIMIT %d",
+				$offset,
+				$limit
 			),
 			ARRAY_A
 		);
@@ -226,6 +278,7 @@ class MVN_DB_Scanner {
 			}
 			self::scan_row( 'postmeta', $row, array( 'meta_key', 'meta_value' ), $sigs, $state );
 		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ]['meta_id'];
 
 		return count( $rows );
 	}
@@ -236,10 +289,11 @@ class MVN_DB_Scanner {
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT ID, user_login, user_email, user_url, display_name FROM {$wpdb->users}
+				WHERE ID > %d
 				ORDER BY ID ASC
-				LIMIT %d OFFSET %d",
-				$limit,
-				$offset
+				LIMIT %d",
+				$offset,
+				$limit
 			),
 			ARRAY_A
 		);
@@ -251,6 +305,7 @@ class MVN_DB_Scanner {
 		foreach ( $rows as $row ) {
 			self::scan_row( 'users', $row, array( 'user_login', 'user_email', 'user_url', 'display_name' ), $sigs, $state );
 		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ]['ID'];
 
 		return count( $rows );
 	}
@@ -261,10 +316,11 @@ class MVN_DB_Scanner {
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT umeta_id, user_id, meta_key, meta_value FROM {$wpdb->usermeta}
+				WHERE umeta_id > %d
 				ORDER BY umeta_id ASC
-				LIMIT %d OFFSET %d",
-				$limit,
-				$offset
+				LIMIT %d",
+				$offset,
+				$limit
 			),
 			ARRAY_A
 		);
@@ -274,9 +330,75 @@ class MVN_DB_Scanner {
 		}
 
 		foreach ( $rows as $row ) {
+			if ( 'wp_application_passwords' === $row['meta_key'] && ! empty( $row['meta_value'] ) ) {
+				MVN_Scanner::add_finding(
+					$state,
+					array(
+						'source' => 'db', 'table' => 'usermeta', 'row_id' => (int) $row['umeta_id'],
+						'column' => 'meta_value', 'row_key' => $row['user_id'] . '/' . $row['meta_key'],
+						'rel' => 'db:usermeta:' . $row['user_id'] . '/wp_application_passwords:meta_value',
+						'sig' => 'suspicious_application_password', 'label' => 'Application Password نیازمند بازبینی',
+						'severity' => 'warning', 'detail' => 'وجود Application Password ثبت شد؛ رخداد جدید/ناشناخته را بررسی کنید.',
+						'action' => 'db_review', 'confidence' => 65,
+						'evidence' => array( array( 'engine' => 'db', 'signal' => 'application_password' ) ),
+					),
+					(string) $row['meta_value'],
+					md5( (string) $row['meta_value'] )
+				);
+			}
 			self::scan_row( 'usermeta', $row, array( 'meta_key', 'meta_value' ), $sigs, $state );
 		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ]['umeta_id'];
 
+		return count( $rows );
+	}
+
+	private static function scan_generic( $logical, $table, $pk, $columns, $cursor, $limit, $sigs, &$state ) {
+		global $wpdb;
+		if ( ! $table || ! preg_match( '/^[A-Za-z0-9_]+$/', $table ) || ! preg_match( '/^[A-Za-z0-9_]+$/', $pk ) ) {
+			return 0;
+		}
+		$select = array_unique( array_merge( array( $pk ), $columns ) );
+		foreach ( $select as $column ) {
+			if ( ! preg_match( '/^[A-Za-z0-9_]+$/', $column ) ) {
+				return 0;
+			}
+		}
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT ' . implode( ',', $select ) . " FROM {$table} WHERE {$pk} > %d ORDER BY {$pk} ASC LIMIT %d",
+				$cursor,
+				$limit
+			),
+			ARRAY_A
+		);
+		if ( empty( $rows ) ) {
+			return 0;
+		}
+		foreach ( $rows as $row ) {
+			if ( 'sitemeta' === $logical && isset( $row['meta_key'] ) && 'active_sitewide_plugins' === $row['meta_key'] ) {
+				$active = maybe_unserialize( $row['meta_value'] );
+				foreach ( is_array( $active ) ? array_keys( $active ) : array() as $plugin ) {
+					if ( MVN_Ghost_Plugins::path_ioc_match( 'wp-content/plugins/' . $plugin ) ) {
+						MVN_Scanner::add_finding(
+							$state,
+							array(
+								'source' => 'db', 'table' => 'sitemeta', 'row_id' => (int) $row['meta_id'],
+								'column' => 'meta_value', 'row_key' => $row['meta_id'],
+								'rel' => 'db:sitemeta:' . $row['meta_id'] . ':meta_value',
+								'sig' => 'network_active_malware_plugin', 'label' => 'پلاگین بدافزار network-active',
+								'severity' => 'critical', 'detail' => $plugin, 'action' => 'db_review', 'confidence' => 99,
+								'evidence' => array( array( 'engine' => 'multisite', 'signal' => 'path_ioc' ) ),
+							),
+							$plugin,
+							md5( $plugin )
+						);
+					}
+				}
+			}
+			self::scan_row( $logical, $row, $columns, $sigs, $state );
+		}
+		$state['db_last_id'] = (int) $rows[ count( $rows ) - 1 ][ $pk ];
 		return count( $rows );
 	}
 
@@ -316,6 +438,12 @@ class MVN_DB_Scanner {
 				return isset( $row['user_login'] ) ? $row['user_login'] : ( isset( $row['ID'] ) ? $row['ID'] : '0' );
 			case 'usermeta':
 				return ( isset( $row['user_id'] ) ? $row['user_id'] : '0' ) . '/' . ( isset( $row['meta_key'] ) ? $row['meta_key'] : '' );
+			case 'comments':
+				return isset( $row['comment_ID'] ) ? $row['comment_ID'] : '0';
+			case 'commentmeta':
+			case 'termmeta':
+			case 'sitemeta':
+				return isset( $row['meta_id'] ) ? $row['meta_id'] : '0';
 		}
 		return '0';
 	}
@@ -455,6 +583,12 @@ class MVN_DB_Scanner {
 				return isset( $row['ID'] ) ? (int) $row['ID'] : 0;
 			case 'usermeta':
 				return isset( $row['umeta_id'] ) ? (int) $row['umeta_id'] : 0;
+			case 'comments':
+				return isset( $row['comment_ID'] ) ? (int) $row['comment_ID'] : 0;
+			case 'commentmeta':
+			case 'termmeta':
+			case 'sitemeta':
+				return isset( $row['meta_id'] ) ? (int) $row['meta_id'] : 0;
 		}
 		return 0;
 	}

@@ -77,6 +77,19 @@ function mvn_signature_confidence_map() {
 		'core_checksum_missing'     => 97,
 		'core_checksum_extra'       => 93,
 		'core_checksum_unavailable' => 40,
+		'behavior_chain'            => 65,
+		'wpconfig_execution'        => 94,
+		'wpconfig_prepend'          => 98,
+		'wpconfig_external_include' => 96,
+		'wpconfig_debug_display'    => 68,
+		'wpconfig_weak_salts'       => 75,
+		'archive_entry_limit'       => 85,
+		'archive_zip_slip'          => 99,
+		'archive_bomb'              => 92,
+		'archive_known_malware_hash'=> 99,
+		'archive_php_payload'       => 95,
+		'php_in_upload_archive'     => 96,
+		'suspicious_symlink'        => 65,
 	);
 
 	return apply_filters( 'mvn_signature_confidence_map', $map );
@@ -122,16 +135,13 @@ function mvn_compute_confidence( $sig_id, $severity, $rel, $content = '' ) {
  */
 function mvn_confidence_label( $score ) {
 	$score = (int) $score;
-	if ( $score >= 85 ) {
-		return 'بسیار بالا';
+	if ( $score >= 95 ) {
+		return 'قطعی/قابل رفع خودکار';
 	}
 	if ( $score >= 65 ) {
-		return 'بالا';
+		return 'نیازمند تأیید مدیر';
 	}
-	if ( $score >= 45 ) {
-		return 'متوسط';
-	}
-	return 'پایین';
+	return 'فقط گزارش';
 }
 
 /**
@@ -139,14 +149,11 @@ function mvn_confidence_label( $score ) {
  */
 function mvn_confidence_class( $score ) {
 	$score = (int) $score;
-	if ( $score >= 85 ) {
+	if ( $score >= 95 ) {
 		return 'high';
 	}
 	if ( $score >= 65 ) {
 		return 'mid';
-	}
-	if ( $score >= 45 ) {
-		return 'low';
 	}
 	return 'very-low';
 }

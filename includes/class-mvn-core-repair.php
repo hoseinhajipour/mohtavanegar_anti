@@ -86,16 +86,23 @@ class MVN_Core_Repair {
 	 * Start a repair job: open zip, build file list.
 	 */
 	public static function start() {
+		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 1800 );
+		if ( ! $lock ) {
+			return new WP_Error( 'job_locked', 'یک عملیات اسکن/تعمیر دیگر در حال اجراست.' );
+		}
 		if ( ! class_exists( 'ZipArchive' ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'no_zip', 'افزونه ZipArchive در PHP فعال نیست.' );
 		}
 		if ( ! is_file( MVN_SOURCE_ZIP ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'no_zip_file', 'فایل wordpress_core.zip در پوشه sources پلاگین پیدا نشد.' );
 		}
 
 		$zip = new ZipArchive();
 		$res = $zip->open( MVN_SOURCE_ZIP );
 		if ( true !== $res ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'zip_open', 'باز کردن آرشیو هسته ناموفق بود (کد: ' . $res . ').' );
 		}
 
@@ -128,6 +135,8 @@ class MVN_Core_Repair {
 			'skipped'    => 0,
 			'errors'     => array(),
 			'entries'    => $entries,
+			'backups'    => array(),
+			'lock_token' => $lock,
 		);
 		mvn_state_write( self::STATE_KEY, $state );
 		mvn_log( 'Core repair started: files=' . $state['total'] );
@@ -141,10 +150,16 @@ class MVN_Core_Repair {
 	 * @return array|WP_Error
 	 */
 	public static function start_selective( $rels ) {
+		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 1800 );
+		if ( ! $lock ) {
+			return new WP_Error( 'job_locked', 'یک عملیات اسکن/تعمیر دیگر در حال اجراست.' );
+		}
 		if ( ! class_exists( 'ZipArchive' ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'no_zip', 'افزونه ZipArchive در PHP فعال نیست.' );
 		}
 		if ( ! is_file( MVN_SOURCE_ZIP ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'no_zip_file', 'فایل wordpress_core.zip در پوشه sources پلاگین پیدا نشد.' );
 		}
 
@@ -156,12 +171,14 @@ class MVN_Core_Repair {
 			}
 		}
 		if ( empty( $want ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'empty', 'هیچ فایل هسته‌ای معتبری برای تعمیر انتخابی یافت نشد.' );
 		}
 
 		$zip = new ZipArchive();
 		$res = $zip->open( MVN_SOURCE_ZIP );
 		if ( true !== $res ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'zip_open', 'باز کردن آرشیو هسته ناموفق بود (کد: ' . $res . ').' );
 		}
 
@@ -185,6 +202,7 @@ class MVN_Core_Repair {
 		$zip->close();
 
 		if ( empty( $entries ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'not_in_zip', 'هیچ‌کدام از فایل‌های انتخابی داخل wordpress_core.zip نبودند. ابتدا «دریافت آخرین نسخه» را بزنید.' );
 		}
 
@@ -200,6 +218,8 @@ class MVN_Core_Repair {
 			'errors'     => array(),
 			'entries'    => $entries,
 			'missing_in_zip' => array_keys( $want ),
+			'backups'     => array(),
+			'lock_token'  => $lock,
 		);
 		mvn_state_write( self::STATE_KEY, $state );
 		mvn_log( 'Core selective repair started: files=' . $state['total'] );
@@ -279,10 +299,10 @@ class MVN_Core_Repair {
 		if ( is_file( $abs ) ) {
 			MVN_Quarantine::store( $rel, array( 'reason' => 'pre-core-repair' ) );
 		}
-		if ( false === @file_put_contents( $abs, $content ) ) {
+		if ( ! mvn_atomic_write( $abs, $content, 0644 ) ) {
 			return new WP_Error( 'write_fail', 'نوشتن فایل هسته ناموفق بود.' );
 		}
-		@chmod( $abs, 0644 );
+		mvn_invalidate_runtime_caches( array( $abs ) );
 		mvn_log( "Core file repaired: {$rel}" );
 		return true;
 	}
@@ -298,6 +318,7 @@ class MVN_Core_Repair {
 		if ( ! class_exists( 'ZipArchive' ) ) {
 			$state['status'] = 'error';
 			$state['errors'][] = 'ZipArchive missing';
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_state_write( self::STATE_KEY, $state );
 			return $state;
 		}
@@ -306,6 +327,7 @@ class MVN_Core_Repair {
 		if ( true !== $zip->open( MVN_SOURCE_ZIP ) ) {
 			$state['status']   = 'error';
 			$state['errors'][] = 'Cannot reopen zip';
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_state_write( self::STATE_KEY, $state );
 			return $state;
 		}
@@ -322,6 +344,14 @@ class MVN_Core_Repair {
 			if ( ! $abs ) {
 				$state['skipped']++;
 				continue;
+			}
+			if ( is_file( $abs ) && empty( $state['backups'][ $rel ] ) ) {
+				$backup_id = MVN_Quarantine::store( $rel, array( 'reason' => 'pre-core-repair', 'repair_id' => $state['id'] ) );
+				if ( ! $backup_id ) {
+					$state['errors'][] = $rel . ': snapshot قبل از تعمیر ناموفق';
+					continue;
+				}
+				$state['backups'][ $rel ] = $backup_id;
 			}
 
 			$content = $zip->getFromIndex( $entry['index'] );
@@ -341,12 +371,12 @@ class MVN_Core_Repair {
 				wp_mkdir_p( $parent );
 			}
 
-			$ok = @file_put_contents( $abs, $content );
-			if ( false === $ok ) {
+			$ok = mvn_atomic_write( $abs, $content, 0644 );
+			if ( ! $ok || md5_file( $abs ) !== md5( $content ) ) {
 				$state['errors'][] = $rel . ': نوشتن ناموفق';
 				continue;
 			}
-			@chmod( $abs, 0644 );
+			mvn_invalidate_runtime_caches( array( $abs ) );
 			$state['written']++;
 		}
 
@@ -355,9 +385,10 @@ class MVN_Core_Repair {
 		$state['updated_at'] = gmdate( 'c' );
 
 		if ( $end >= $total ) {
-			$state['status']      = 'done';
+			$state['status']      = empty( $state['errors'] ) ? 'done' : 'failed';
 			$state['finished_at'] = gmdate( 'c' );
 			$state['entries']     = array(); // free memory
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_log( 'Core repair done: written=' . $state['written'] . ' skipped=' . $state['skipped'] . ' errors=' . count( $state['errors'] ) );
 		}
 
@@ -367,6 +398,21 @@ class MVN_Core_Repair {
 
 	public static function get_state() {
 		return mvn_state_read( self::STATE_KEY );
+	}
+
+	public static function rollback() {
+		$state = self::get_state();
+		if ( empty( $state['backups'] ) || ! is_array( $state['backups'] ) ) {
+			return new WP_Error( 'no_rollback', 'snapshot تعمیر هسته در دسترس نیست.' );
+		}
+		$errors = array();
+		foreach ( array_reverse( $state['backups'], true ) as $rel => $id ) {
+			$result = MVN_Quarantine::restore( $id, true );
+			if ( is_wp_error( $result ) ) {
+				$errors[] = $rel . ': ' . $result->get_error_message();
+			}
+		}
+		return empty( $errors ) ? true : new WP_Error( 'rollback_partial', implode( ' | ', $errors ) );
 	}
 
 	/**
@@ -427,6 +473,39 @@ class MVN_Core_Repair {
 	}
 
 	/**
+	 * Verify downloaded core files against the official checksum API.
+	 *
+	 * @param ZipArchive $zip     Open archive.
+	 * @param string     $version Exact WordPress version.
+	 * @return true|WP_Error
+	 */
+	private static function verify_zip_checksums( $zip, $version ) {
+		$url = 'https://api.wordpress.org/core/checksums/1.0/?version=' . rawurlencode( $version ) . '&locale=en_US';
+		$res = MVN_URL_Trust::get( $url, array( 'timeout' => 30, 'limit_response_size' => 8 * MB_IN_BYTES ) );
+		if ( is_wp_error( $res ) || 200 !== (int) wp_remote_retrieve_response_code( $res ) ) {
+			return new WP_Error( 'checksum_unavailable', 'دریافت checksum رسمی نسخه دقیق ناموفق بود؛ تعمیر برای ایمنی متوقف شد.' );
+		}
+		$data = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( empty( $data['checksums'] ) || ! is_array( $data['checksums'] ) ) {
+			return new WP_Error( 'checksum_invalid', 'پاسخ checksum رسمی نامعتبر است.' );
+		}
+		$verified = 0;
+		for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+			$name = $zip->getNameIndex( $i );
+			$rel  = $name ? self::strip_zip_root( $name ) : '';
+			if ( ! $rel || '/' === substr( $rel, -1 ) || 0 === strpos( $rel, 'wp-content/' ) || empty( $data['checksums'][ $rel ] ) ) {
+				continue;
+			}
+			$content = $zip->getFromIndex( $i );
+			if ( false === $content || ! hash_equals( strtolower( (string) $data['checksums'][ $rel ] ), md5( $content ) ) ) {
+				return new WP_Error( 'checksum_mismatch', 'checksum رسمی آرشیو برای فایل ' . $rel . ' مطابقت ندارد.' );
+			}
+			$verified++;
+		}
+		return $verified > 100 ? true : new WP_Error( 'checksum_incomplete', 'تعداد فایل‌های تأییدشده آرشیو کافی نیست.' );
+	}
+
+	/**
 	 * Download latest WordPress zip from wordpress.org into sources/wordpress_core.zip.
 	 *
 	 * @return array|WP_Error Updated source_status() on success.
@@ -447,8 +526,18 @@ class MVN_Core_Repair {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		@set_time_limit( 600 );
 
-		$url = apply_filters( 'mvn_wordpress_core_download_url', self::DOWNLOAD_URL );
-		mvn_log( 'Core zip: downloading latest WordPress from ' . $url );
+		global $wp_version;
+		$expected_version = preg_replace( '/[^0-9A-Za-z.\-]/', '', (string) $wp_version );
+		if ( '' === $expected_version ) {
+			return new WP_Error( 'unknown_version', 'نسخه دقیق وردپرس قابل تشخیص نیست.' );
+		}
+		$url = 'https://downloads.wordpress.org/release/wordpress-' . rawurlencode( $expected_version ) . '.zip';
+		$url = apply_filters( 'mvn_wordpress_core_download_url', $url, $expected_version );
+		$trusted = MVN_URL_Trust::validate( $url );
+		if ( is_wp_error( $trusted ) ) {
+			return $trusted;
+		}
+		mvn_log( 'Core zip: downloading exact WordPress ' . $expected_version . ' from ' . $url );
 
 		$tmp = download_url( $url, 600 );
 		if ( is_wp_error( $tmp ) ) {
@@ -478,11 +567,20 @@ class MVN_Core_Repair {
 				}
 			}
 		}
+		$checksum = $version ? self::verify_zip_checksums( $zip, $version ) : new WP_Error( 'no_version', 'نسخه آرشیو مشخص نیست.' );
 		$zip->close();
 
 		if ( ! $has_core ) {
 			@unlink( $tmp );
 			return new WP_Error( 'invalid_core', 'آرشیو دانلودشده هسته وردپرس معتبر نیست.' );
+		}
+		if ( is_wp_error( $checksum ) ) {
+			@unlink( $tmp );
+			return $checksum;
+		}
+		if ( $version !== $expected_version ) {
+			@unlink( $tmp );
+			return new WP_Error( 'version_mismatch', 'نسخه آرشیو (' . $version . ') با نسخه نصب‌شده (' . $expected_version . ') یکسان نیست.' );
 		}
 
 		$bak = MVN_SOURCE_ZIP . '.bak';

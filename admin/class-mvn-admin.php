@@ -25,7 +25,14 @@ class MVN_Admin {
 		add_action( 'admin_init', array( $this, 'maybe_export_issues_csv' ) );
 		add_action( 'admin_init', array( $this, 'maybe_export_perf_csv' ) );
 
-		$ajax = array(
+		$ajax = $this->ajax_actions();
+		foreach ( $ajax as $action ) {
+			add_action( 'wp_ajax_' . $action, array( $this, 'ajax_' . substr( $action, 4 ) ) );
+		}
+	}
+
+	private function ajax_actions() {
+		return array(
 			'mvn_scan_start',
 			'mvn_scan_tick',
 			'mvn_scan_status',
@@ -47,6 +54,7 @@ class MVN_Admin {
 			'mvn_core_tick',
 			'mvn_core_download',
 			'mvn_core_selective',
+			'mvn_core_rollback',
 			'mvn_core_integrity_start',
 			'mvn_core_integrity_tick',
 			'mvn_as_scan_start',
@@ -54,8 +62,11 @@ class MVN_Admin {
 			'mvn_as_purge_all',
 			'mvn_plugin_start',
 			'mvn_plugin_tick',
+			'mvn_plugin_rollback',
 			'mvn_theme_start',
 			'mvn_theme_tick',
+			'mvn_theme_rollback',
+			'mvn_immutable_release',
 			'mvn_perms_start',
 			'mvn_perms_tick',
 			'mvn_hardening_save',
@@ -72,13 +83,10 @@ class MVN_Admin {
 			'mvn_perf_optimize',
 			'mvn_perf_clear',
 		);
-		foreach ( $ajax as $action ) {
-			add_action( 'wp_ajax_' . $action, array( $this, 'ajax_' . substr( $action, 4 ) ) );
-		}
 	}
 
 	public function menu() {
-		$cap = 'manage_options';
+		$cap = 'mvn_scan';
 		add_menu_page(
 			'آنتی‌ویروس محتوانگار',
 			'آنتی‌ویروس',
@@ -90,11 +98,11 @@ class MVN_Admin {
 		);
 		add_submenu_page( 'mvn-antivirus', 'داشبورد', 'داشبورد', $cap, 'mvn-antivirus', array( $this, 'page_dashboard' ) );
 		add_submenu_page( 'mvn-antivirus', 'اسکن', 'اسکن', $cap, 'mvn-scan', array( $this, 'page_scan' ) );
-		add_submenu_page( 'mvn-antivirus', 'رفع مشکلات (Fix)', 'رفع مشکلات', $cap, 'mvn-fix', array( $this, 'page_fix' ) );
-		add_submenu_page( 'mvn-antivirus', 'تعمیر هسته (Repair)', 'تعمیر هسته', $cap, 'mvn-repair', array( $this, 'page_repair' ) );
-		add_submenu_page( 'mvn-antivirus', 'سخت‌سازی', 'سخت‌سازی', $cap, 'mvn-hardening', array( $this, 'page_hardening' ) );
-		add_submenu_page( 'mvn-antivirus', 'قرنطینه', 'قرنطینه', $cap, 'mvn-quarantine', array( $this, 'page_quarantine' ) );
-		add_submenu_page( 'mvn-antivirus', 'سرعت لود', 'سرعت لود', $cap, 'mvn-perf', array( $this, 'page_perf' ) );
+		add_submenu_page( 'mvn-antivirus', 'رفع مشکلات (Fix)', 'رفع مشکلات', 'mvn_remediate', 'mvn-fix', array( $this, 'page_fix' ) );
+		add_submenu_page( 'mvn-antivirus', 'تعمیر هسته (Repair)', 'تعمیر هسته', 'mvn_remediate', 'mvn-repair', array( $this, 'page_repair' ) );
+		add_submenu_page( 'mvn-antivirus', 'سخت‌سازی', 'سخت‌سازی', 'mvn_configure', 'mvn-hardening', array( $this, 'page_hardening' ) );
+		add_submenu_page( 'mvn-antivirus', 'قرنطینه', 'قرنطینه', 'mvn_remediate', 'mvn-quarantine', array( $this, 'page_quarantine' ) );
+		add_submenu_page( 'mvn-antivirus', 'سرعت لود', 'سرعت لود', 'mvn_configure', 'mvn-perf', array( $this, 'page_perf' ) );
 	}
 
 	public function assets( $hook ) {
@@ -109,6 +117,15 @@ class MVN_Admin {
 			array(
 				'ajax'  => admin_url( 'admin-ajax.php' ),
 				'nonce' => wp_create_nonce( MVN_NONCE_ACTION ),
+				'nonces' => array_combine(
+					$this->ajax_actions(),
+					array_map(
+						static function ( $action ) {
+							return wp_create_nonce( 'mvn_ajax_' . $action );
+						},
+						$this->ajax_actions()
+					)
+				),
 				'i18n'  => array(
 					'scanning'       => 'در حال اسکن...',
 					'paused'         => 'اسکن متوقف موقت شد',
@@ -154,6 +171,12 @@ class MVN_Admin {
 				'core'      => $core,
 				'hard'      => $hard,
 				'sig_pack'  => MVN_Signature_Pack::status(),
+				'self_integrity' => MVN_Self_Integrity::verify(),
+				'schedule' => MVN_Scheduler::status(),
+				'incidents' => MVN_Incidents::all(),
+				'data_dir' => mvn_data_dir(),
+				'permission_audit' => MVN_Hardening::permission_audit(),
+				'audit_rows' => MVN_Audit_Log::read_recent( 20 ),
 				'q_count'   => count( MVN_Quarantine::list_all() ),
 				'checklist' => mvn_security_checklist(
 					array(
@@ -310,10 +333,29 @@ class MVN_Admin {
 	/* ===================== AJAX ===================== */
 
 	private function guard() {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		$action = isset( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
+		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
+		$scan_only = array( 'mvn_scan_start', 'mvn_scan_tick', 'mvn_scan_status', 'mvn_scan_pause', 'mvn_scan_resume', 'mvn_scan_stop', 'mvn_core_integrity_start', 'mvn_core_integrity_tick', 'mvn_as_scan_start', 'mvn_as_scan_tick', 'mvn_fix_preview' );
+		$cap = in_array( $action, $configure, true ) ? 'mvn_configure' : ( in_array( $action, $scan_only, true ) ? 'mvn_scan' : 'mvn_remediate' );
+		if ( ! current_user_can( $cap ) ) {
 			wp_send_json_error( array( 'message' => 'دسترسی ندارید.' ), 403 );
 		}
-		check_ajax_referer( MVN_NONCE_ACTION, 'nonce' );
+		check_ajax_referer( 'mvn_ajax_' . $action, 'nonce' );
+		if ( 'mvn_remediate' === $cap ) {
+			$key = 'mvn_rate_' . get_current_user_id() . '_' . md5( $action );
+			$rate = get_transient( $key );
+			$rate = is_array( $rate ) ? $rate : array( 'count' => 0, 'started' => time() );
+			$window = 60;
+			$limit = 'mvn_ghost_purge' === $action ? 3 : 20;
+			if ( time() - (int) $rate['started'] > $window ) {
+				$rate = array( 'count' => 0, 'started' => time() );
+			}
+			$rate['count']++;
+			set_transient( $key, $rate, $window );
+			if ( $rate['count'] > $limit ) {
+				wp_send_json_error( array( 'message' => 'تعداد عملیات مخرب بیش از حد مجاز است؛ کمی صبر کنید.' ), 429 );
+			}
+		}
 	}
 
 	public function ajax_scan_start() {
@@ -344,6 +386,9 @@ class MVN_Admin {
 				'scan_media'  => $scan_media,
 			)
 		);
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message() ), 409 );
+		}
 		wp_send_json_success( $this->public_scan_state( $state ) );
 	}
 
@@ -401,6 +446,38 @@ class MVN_Admin {
 			wp_send_json_error( array( 'message' => $state->get_error_message() ) );
 		}
 		wp_send_json_success( $this->public_scan_state( $state ) );
+	}
+
+	public function ajax_core_rollback() {
+		$this->guard();
+		$result = MVN_Core_Repair::rollback();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( array( 'message' => 'Rollback هسته انجام شد.' ) );
+	}
+
+	public function ajax_plugin_rollback() {
+		$this->guard();
+		$result = MVN_Plugin_Repair::rollback();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( array( 'message' => 'Rollback پلاگین انجام شد.' ) );
+	}
+
+	public function ajax_theme_rollback() {
+		$this->guard();
+		$result = MVN_Theme_Repair::rollback();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( array( 'message' => 'Rollback قالب انجام شد.' ) );
+	}
+
+	public function ajax_immutable_release() {
+		$this->guard();
+		wp_send_json_success( MVN_Ghost_Plugins::release_immutable_locks() );
 	}
 
 	private function public_scan_state( $state ) {
@@ -572,27 +649,36 @@ class MVN_Admin {
 		@set_time_limit( 120 );
 		$result = MVN_Ghost_Plugins::purge_known();
 		$msg = sprintf(
-			'حذف/جابه‌جایی: %d | rename: %d | option: %d | usermeta: %d | scrub: %d',
+			'حذف/جابه‌جایی: %d | rename: %d | زنجیره prepend: %d | dropper: %d | cron: %d | option: %d | usermeta: %d | scrub: %d',
 			count( $result['deleted'] ),
 			isset( $result['renamed'] ) ? count( $result['renamed'] ) : 0,
+			isset( $result['prepend'] ) ? count( $result['prepend'] ) : 0,
+			isset( $result['droppers'] ) ? count( $result['droppers'] ) : 0,
+			isset( $result['cron_removed'] ) ? count( $result['cron_removed'] ) : 0,
 			count( $result['options'] ),
 			isset( $result['usermeta'] ) ? count( $result['usermeta'] ) : 0,
 			(int) $result['active_scrubbed']
 		);
 		if ( ! empty( $result['safe_db'] ) ) {
-			$msg .= ' | db.php امن موقت نصب شد (قبل از MU اجرا می‌شود)';
+			$msg .= ' | db.php امن موقت نصب شد';
+		}
+		if ( ! empty( $result['safe_ac'] ) ) {
+			$msg .= ' | advanced-cache امن موقت نصب شد';
 		}
 		if ( ! empty( $result['kill_mu'] ) ) {
-			$msg .= ' | MU-killer نصب شد — یک‌بار صفحه را رفرش کنید';
+			$msg .= ' | MU-killer نصب شد';
 		}
+		$msg .= ' — وضعیت تمیز فقط بعد از رفرش معتبر است؛ یک‌بار فرانت را باز کنید سپس Repair را رفرش کنید';
 		if ( ! empty( $result['errors'] ) ) {
 			$msg .= ' | خطا: ' . implode( '؛ ', $result['errors'] );
 		}
 		wp_send_json_success(
 			array(
-				'message' => $msg,
-				'result'  => $result,
-				'status'  => MVN_Ghost_Plugins::status(),
+				'message'             => $msg,
+				'result'              => $result,
+				'verify_after_reload' => true,
+				// Same-request status is often dirty (in-memory malware); client must reload.
+				'status'              => null,
 			)
 		);
 	}

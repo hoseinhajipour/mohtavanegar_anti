@@ -111,8 +111,27 @@ $repair_url = admin_url( 'admin.php?page=mvn-repair' );
 							<code><?php echo esc_html( $iss['rel'] ); ?></code>
 						<?php endif; ?>
 					</td>
-					<td><?php echo esc_html( $iss['label'] ); ?><?php echo ! empty( $iss['detail'] ) ? '<br><small class="mvn-muted">' . esc_html( $iss['detail'] ) . '</small>' : ''; ?></td>
-					<td><code><?php echo esc_html( $action_show ); ?></code></td>
+					<td>
+						<?php echo esc_html( $iss['label'] ); ?>
+						<?php echo ! empty( $iss['detail'] ) ? '<br><small class="mvn-muted">' . esc_html( $iss['detail'] ) . '</small>' : ''; ?>
+						<?php if ( ! empty( $iss['evidence'] ) && is_array( $iss['evidence'] ) ) : ?>
+							<br><small class="mvn-muted">شواهد:
+							<?php
+							$signals = array();
+							foreach ( $iss['evidence'] as $evidence ) {
+								if ( is_array( $evidence ) ) {
+									$signals[] = ( isset( $evidence['engine'] ) ? $evidence['engine'] : '?' ) . ':' . ( isset( $evidence['signal'] ) ? $evidence['signal'] : '?' );
+								}
+							}
+							echo esc_html( implode( '، ', array_unique( $signals ) ) );
+							?>
+							</small>
+						<?php endif; ?>
+					</td>
+					<td>
+						<code><?php echo esc_html( $action_show ); ?></code><br>
+						<small class="mvn-muted"><?php echo esc_html( $conf >= 95 && 'safe' === $risk ? 'رفع خودکار: confidence 95+ و شواهد قطعی' : ( $conf >= 65 ? 'فقط با تأیید مدیر' : 'فقط گزارش/ignore' ) ); ?></small>
+					</td>
 					<td><pre class="mvn-snippet"><?php echo esc_html( isset( $iss['snippet'] ) ? $iss['snippet'] : '' ); ?></pre></td>
 					<td class="mvn-actions-cell">
 						<?php if ( 'repo_repair' === $action_show ) : ?>

@@ -7,6 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 	'ioc_paths'          => array(),
 	'persistence'        => array(),
+	'protections'        => array(),
 	'hidden_plugins'     => array(),
 	'ghost_admins'       => 0,
 	'ghost_admin_sample' => array(),
@@ -15,6 +16,15 @@ $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 	'visible_admins'     => 0,
 );
 ?>
+<div class="mvn-card" style="margin-bottom:16px">
+	<h2>Rollback تراکنشی</h2>
+	<p class="mvn-muted">بازگردانی عملیات اخیر نیازمند تأیید دوم مرورگر است.</p>
+	<?php if ( ! empty( $cstate['backups'] ) ) : ?><button class="button mvn-repair-rollback" data-action="mvn_core_rollback">Rollback هسته</button><?php endif; ?>
+	<?php if ( ! empty( $plstate['rollback_path'] ) ) : ?><button class="button mvn-repair-rollback" data-action="mvn_plugin_rollback">Rollback پلاگین</button><?php endif; ?>
+	<?php if ( ! empty( $thstate['rollback_path'] ) ) : ?><button class="button mvn-repair-rollback" data-action="mvn_theme_rollback">Rollback قالب</button><?php endif; ?>
+	<button class="button mvn-repair-rollback" data-action="mvn_immutable_release">Release قفل‌های immutable ثبت‌شده</button>
+	<div id="mvn-rollback-result"></div>
+</div>
 <div class="mvn-card" style="margin-bottom:16px">
 	<h2>پاک‌سازی پایدار: xdav-tracker / Zonal Runner Tap</h2>
 	<p>
@@ -33,6 +43,12 @@ $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 			<span>لایه persistence</span>
 			<b class="<?php echo empty( $ghost['persistence'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
 				<?php echo empty( $ghost['persistence'] ) ? 'یافت نشد' : esc_html( implode( '، ', $ghost['persistence'] ) ); ?>
+			</b>
+		</li>
+		<li>
+			<span>محافظت موقت MVN</span>
+			<b class="mvn-ok">
+				<?php echo empty( $ghost['protections'] ) ? '—' : esc_html( implode( '، ', $ghost['protections'] ) ); ?>
 			</b>
 		</li>
 		<li>
@@ -63,20 +79,41 @@ $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 		</li>
 	</ul>
 	<ol style="margin:12px 0 12px 1.4em;line-height:1.7">
-		<li>دکمه زیر: اول <code>db.php</code>/<code>advanced-cache.php</code> مخرب را خنثی می‌کند (قبل از MU لود می‌شوند و دوباره می‌سازند)، سپس IoC + <code>mu-plugins</code> + hex shells را پاک می‌کند و یک <code>db.php</code> امن موقت می‌گذارد.</li>
-		<li>اگر File Manager حذف نکرد: تیک «Move to Trash» را <strong>بردارید</strong>؛ اول <strong>محتوای داخل پوشه</strong> را پاک کنید بعد خود پوشه. پوشه‌های <code>cache</code>/<code>wpo-cache</code> را خالی کنید (نگه‌داشتن خود پوشه مشکلی ندارد).</li>
-		<li>ترتیب حیاتی روی هاست: <code>.user.ini</code> → فایل‌های hex مثل <code>81a….php</code> → <code>db.php</code> مشکوک → فایل‌های داخل <code>mu-plugins</code> (به‌خصوص <code>zonal-runner-tap.php</code>).</li>
-		<li>با SSH: <code>chattr -i فایل</code> سپس <code>rm -f</code>. بدون SSH، بعد از دکمه بالا یک‌بار سایت را باز کنید تا db امن + MU-killer reinfection را بکشند.</li>
-		<li>اسکن کامل + حذف ~۸۰ ادمین ghost از phpMyAdmin + تعمیر هسته + عوض کردن همه پسوردها/FTP/DB.</li>
+		<li>دکمه زیر (۱.۸.۳): <strong>شکستن زنجیره auto_prepend</strong> (<code>.user.ini</code>→shell) با خنثی‌سازی + قفل، شکار <strong>dropper</strong> در کل <code>wp-content</code>، حذف cron مخرب، خنثی‌سازی <code>db.php</code>/<code>advanced-cache</code>/<code>object-cache</code>، چند پاس + shutdown، نصب db/MU امن.</li>
+		<li>اگر File Manager حذف نکرد: تیک «Move to Trash» را <strong>بردارید</strong>؛ اول محتوای داخل پوشه را پاک کنید.</li>
+		<li>بعد از دکمه: یک‌بار فرانت سایت را باز کنید، سپس این صفحه را رفرش کنید — وضعیت تمیز فقط بعد از رفرش معتبر است.</li>
+		<li>اسکن کامل + حذف ادمین ghost از phpMyAdmin + تعمیر هسته + عوض کردن همه پسوردها/FTP/DB.</li>
 	</ol>
 	<button type="button" class="button button-primary" id="mvn-ghost-purge">
-		حذف فوری persistence + IoC + خنثی‌سازی db.php
+		حذف فوری persistence + IoC + شکستن زنجیره auto_prepend
 	</button>
 	<div id="mvn-ghost-purge-result" style="margin-top:10px"></div>
-	<p class="mvn-muted" style="margin-top:10px">
-		علت رایج «حذف نمی‌شود»: <code>db.php</code> مخرب قبل از همه‌چیز لود می‌شود و <code>zonal-runner-tap.php</code> را دوباره می‌نویسد.
-		نسخهٔ ۱.۸.۰ اول همان را خنثی می‌کند. بعد از پاک‌سازی موفق، <code>db.php</code> موقت MVN خودش حذف می‌شود؛ اگر ماند، دستی پاک کنید.
-	</p>
+	<div class="mvn-card" style="margin-top:12px;background:#fff8e5;border:1px solid #f0c36d">
+		<h3 style="margin-top:0">اگر باز هم برگشت: چرا و راه قطعی</h3>
+		<p style="line-height:1.8">
+			این خانواده یک <strong>پوستهٔ auto_prepend</strong> دارد که <em>قبل از</em> وردپرس روی هر درخواست اجرا می‌شود و همه‌چیز
+			(<code>db.php</code>، <code>zonal-runner-tap.php</code>، فایل‌های hex، <code>.user.ini</code>) را دوباره می‌سازد.
+			چون این کد <strong>قبل از پلاگین ما</strong> اجرا می‌شود، حذف صرف از داخل وردپرس همیشه یک قدم عقب است.
+			به همین دلیل PHP فایل <code>.user.ini</code> را تا حدود ۵ دقیقه (<code>user_ini.cache_ttl</code>) کش می‌کند.
+		</p>
+		<p style="line-height:1.8">
+			<strong>راه قطعی (به‌ترتیب):</strong>
+		</p>
+		<ol style="margin:6px 0 6px 1.4em;line-height:1.9">
+			<li><strong>ابزار اضطراری مستقل</strong>: فایل <code>sources/mvn-emergency-clean.php</code> از همین پلاگین را بردارید،
+				داخلش <code>MVN_TOKEN</code> را به یک رمز بلند تغییر دهید و کنار <code>wp-config.php</code> آپلود کنید.
+				فقط با <code>POST</code> و هدر <code>Authorization: Bearer TOKEN</code> چند بار اجرا کنید؛ token هرگز در URL نباشد. سپس <code>action=self_delete</code> را POST کنید.</li>
+			<li><strong>SSH (قطعی‌ترین)</strong>:
+				<code>chattr -i .user.ini *.php wp-content/db.php wp-content/mu-plugins/*.php</code> سپس
+				<code>rm -f</code> فایل‌های آلوده، و از هاست بخواهید <strong>PHP-FPM ری‌استارت</strong> شود تا کش <code>.user.ini</code> پاک شود.</li>
+			<li>حذف ادمین‌های ghost از phpMyAdmin، تعمیر هسته، و <strong>تعویض همهٔ رمزها/FTP/DB/سکرت‌کی‌ها</strong>.
+				تا وقتی راه ورود (FTP/رمز لو رفته) باز باشد، دوباره آلوده می‌شود.</li>
+		</ol>
+		<p class="mvn-muted">
+			«محافظت موقت MVN» قرمز نیست؛ یعنی <code>db.php</code>/MU امن ما فعال است و روی هر درخواست reinfection را می‌کشد.
+			ولی این فقط تا وقتی کار می‌کند که پوستهٔ prepend خنثی/قفل شده باشد.
+		</p>
+	</div>
 </div>
 
 <div class="mvn-grid mvn-grid-2">
@@ -277,7 +314,7 @@ $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 	<p>
 		اگر فایل‌های پلاگین‌های رایگان مخزن وردپرس (مثل Elementor، ویرایشگر کلاسیک، LiteSpeed Cache) آلوده شده باشند،
 		نسخه سالم از <code>wordpress.org</code> دانلود و جایگزین می‌شود.
-		قبل از جایگزینی، نسخه فعلی در <code>wp-content/mvn-data/backups/plugins/</code> پشتیبان‌گیری می‌شود.
+		قبل از جایگزینی، نسخه فعلی در data-dir امن پشتیبان‌گیری می‌شود.
 	</p>
 
 	<div id="mvn-plugin-progress" class="mvn-progress-wrap" style="display:none;margin-bottom:16px">
@@ -342,7 +379,7 @@ $ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
 	<h2>تعمیر قالب‌های مخزن وردپرس</h2>
 	<p>
 		قالب‌های نصب‌شده را از <code>themes.wordpress.org</code> دوباره می‌گیرد و جایگزین می‌کند.
-		قبل از جایگزینی، نسخه فعلی در <code>wp-content/mvn-data/backups/themes/</code> پشتیبان می‌شود.
+		قبل از جایگزینی، نسخه فعلی در data-dir امن پشتیبان می‌شود.
 		قالب‌های پریمیوم/خارج از مخزن قابل دانلود نیستند.
 	</p>
 

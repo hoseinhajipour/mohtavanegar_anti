@@ -27,24 +27,28 @@ class MVN_File_Index {
 
 	/**
 	 * Can we skip deep scan for this file?
+	 * Metadata equality alone is not trusted: SHA-256 must also match.
 	 */
-	public static function is_unchanged_clean( $rel, $mtime, $size ) {
+	public static function is_unchanged_clean( $rel, $mtime, $size, $sha256 = '' ) {
 		$entry = self::get_entry( $rel );
-		if ( ! $entry || empty( $entry['clean'] ) ) {
+		if ( ! $entry || empty( $entry['clean'] ) || empty( $entry['sha256'] ) || ! is_string( $sha256 ) || 64 !== strlen( $sha256 ) ) {
 			return false;
 		}
-		return (int) $entry['mtime'] === (int) $mtime && (int) $entry['size'] === (int) $size;
+		return (int) $entry['mtime'] === (int) $mtime
+			&& (int) $entry['size'] === (int) $size
+			&& hash_equals( (string) $entry['sha256'], strtolower( $sha256 ) );
 	}
 
 	/**
 	 * Queue an index update (flushed in batches).
 	 */
-	public static function mark( $rel, $clean, $mtime, $size ) {
+	public static function mark( $rel, $clean, $mtime, $size, $sha256 = '' ) {
 		$rel = self::norm( $rel );
 		self::$buffer[ $rel ] = array(
 			'mtime'   => (int) $mtime,
 			'size'    => (int) $size,
 			'clean'   => $clean ? 1 : 0,
+			'sha256'  => strtolower( (string) $sha256 ),
 			'updated' => gmdate( 'c' ),
 		);
 	}

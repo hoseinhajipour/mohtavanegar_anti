@@ -102,14 +102,21 @@ class MVN_Plugin_Repair {
 	 * @return array|WP_Error
 	 */
 	public static function start( $slug ) {
+		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 1800 );
+		if ( ! $lock ) {
+			return new WP_Error( 'job_locked', 'یک عملیات اسکن/تعمیر دیگر در حال اجراست.' );
+		}
 		$item = mvn_repo_plugin_by_slug( $slug );
 		if ( ! $item ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'unknown_plugin', 'این پلاگین در لیست مخزن مجاز نیست.' );
 		}
 		if ( self::is_protected( $item['slug'], $item['folder'] ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'protected', 'این پلاگین محافظت‌شده است و قابل جایگزینی نیست.' );
 		}
 		if ( ! class_exists( 'ZipArchive' ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'no_zip', 'افزونه ZipArchive در PHP فعال نیست.' );
 		}
 
@@ -123,14 +130,22 @@ class MVN_Plugin_Repair {
 
 		// Download fresh copy from WordPress.org.
 		mvn_log( "Plugin repair: downloading {$slug} from wordpress.org" );
-		$tmp = download_url( self::download_url_for( $slug ), 300 );
+		$download_url = self::download_url_for( $slug );
+		$trusted = MVN_URL_Trust::validate( $download_url );
+		if ( is_wp_error( $trusted ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
+			return $trusted;
+		}
+		$tmp = download_url( $download_url, 300 );
 		if ( is_wp_error( $tmp ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'download_fail', 'دانلود از مخزن وردپرس ناموفق: ' . $tmp->get_error_message() );
 		}
 
 		if ( ! @rename( $tmp, $zip_path ) ) {
 			if ( ! @copy( $tmp, $zip_path ) ) {
 				@unlink( $tmp );
+				mvn_job_lock_release( 'filesystem_mutation', $lock );
 				return new WP_Error( 'save_fail', 'ذخیره فایل دانلودشده ناموفق بود.' );
 			}
 			@unlink( $tmp );
@@ -140,6 +155,7 @@ class MVN_Plugin_Repair {
 		$zip_root = self::detect_zip_root( $zip_path, $folder, $slug );
 		if ( ! $zip_root ) {
 			@unlink( $zip_path );
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'bad_zip', 'ساختار آرشیو دانلودشده نامعتبر است.' );
 		}
 
@@ -149,6 +165,7 @@ class MVN_Plugin_Repair {
 			$backup = self::backup_plugin( $plugin_abs, $folder, $slug );
 			if ( ! $backup ) {
 				@unlink( $zip_path );
+				mvn_job_lock_release( 'filesystem_mutation', $lock );
 				return new WP_Error(
 					'backup_fail',
 					'پشتیبان‌گیری از نسخه فعلی پلاگین ناموفق بود. سطح دستریس wp-content/mvn-data/backups/plugins را بررسی کنید.'
@@ -156,15 +173,23 @@ class MVN_Plugin_Repair {
 			}
 			$backup_path = $backup['path'];
 			mvn_log( "Plugin repair: backed up {$folder} ({$backup['type']}) -> {$backup_path}" );
-			self::empty_directory( $plugin_abs );
-		} else {
-			wp_mkdir_p( $plugin_abs );
+		}
+
+		// Extract into an isolated sibling; the live plugin is untouched until verification.
+		$stage_abs = dirname( $plugin_abs ) . DIRECTORY_SEPARATOR . '.mvn-stage-' . sanitize_key( $folder ) . '-' . substr( $lock, 0, 8 );
+		self::empty_directory( $stage_abs );
+		if ( ! wp_mkdir_p( $stage_abs ) ) {
+			@unlink( $zip_path );
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
+			return new WP_Error( 'stage_fail', 'ساخت staging تعمیر پلاگین ناموفق بود.' );
 		}
 
 		// Index zip entries for chunked extraction.
 		$zip = new ZipArchive();
 		if ( true !== $zip->open( $zip_path ) ) {
 			@unlink( $zip_path );
+			self::empty_directory( $stage_abs );
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'zip_open', 'باز کردن آرشیو دانلودشده ناموفق بود.' );
 		}
 
@@ -195,6 +220,8 @@ class MVN_Plugin_Repair {
 
 		if ( empty( $entries ) ) {
 			@unlink( $zip_path );
+			self::empty_directory( $stage_abs );
+			mvn_job_lock_release( 'filesystem_mutation', $lock );
 			return new WP_Error( 'empty_zip', 'آرشیو دانلودشده فایل معتبری نداشت.' );
 		}
 
@@ -206,7 +233,9 @@ class MVN_Plugin_Repair {
 			'folder'      => $folder,
 			'zip_path'    => $zip_path,
 			'zip_root'    => $zip_root,
+			'stage_path'   => $stage_abs,
 			'backup_path' => $backup_path,
+			'lock_token'   => $lock,
 			'started_at'  => gmdate( 'c' ),
 			'total'       => count( $entries ),
 			'cursor'      => 0,
@@ -235,15 +264,25 @@ class MVN_Plugin_Repair {
 		if ( ! $zip_path || ! is_file( $zip_path ) || ! $folder ) {
 			$state['status']   = 'error';
 			$state['errors'][] = 'zip یا folder نامعتبر';
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_state_write( self::STATE_KEY, $state );
 			return $state;
 		}
 
 		$plugin_abs = self::plugin_dir( $folder );
+		$stage_abs  = isset( $state['stage_path'] ) ? $state['stage_path'] : '';
+		if ( ! $stage_abs || false === mvn_safe_write_path( $stage_abs ) ) {
+			$state['status']   = 'error';
+			$state['errors'][] = 'مسیر staging نامعتبر';
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
+			mvn_state_write( self::STATE_KEY, $state );
+			return $state;
+		}
 		$zip        = new ZipArchive();
 		if ( true !== $zip->open( $zip_path ) ) {
 			$state['status']   = 'error';
 			$state['errors'][] = 'باز کردن zip ناموفق';
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_state_write( self::STATE_KEY, $state );
 			return $state;
 		}
@@ -256,7 +295,7 @@ class MVN_Plugin_Repair {
 		for ( $i = $start; $i < $end; $i++ ) {
 			$entry = $entries[ $i ];
 			$rel   = $entry['rel'];
-			$dest  = $plugin_abs . DIRECTORY_SEPARATOR . str_replace( '/', DIRECTORY_SEPARATOR, $rel );
+			$dest  = $stage_abs . DIRECTORY_SEPARATOR . str_replace( '/', DIRECTORY_SEPARATOR, $rel );
 
 			$content = $zip->getFromIndex( $entry['index'] );
 			if ( false === $content ) {
@@ -274,7 +313,7 @@ class MVN_Plugin_Repair {
 				wp_mkdir_p( $parent );
 			}
 
-			if ( false === @file_put_contents( $dest, $content ) ) {
+			if ( ! mvn_atomic_write( $dest, $content, 0644 ) ) {
 				$state['errors'][] = $rel . ': نوشتن ناموفق';
 				continue;
 			}
@@ -287,10 +326,38 @@ class MVN_Plugin_Repair {
 		$state['updated_at'] = gmdate( 'c' );
 
 		if ( $end >= $total ) {
-			$state['status']      = 'done';
+			$state['status'] = 'done';
+			if ( ! empty( $state['errors'] ) ) {
+				$state['status'] = 'error';
+				self::empty_directory( $stage_abs );
+			} else {
+				$verified = self::verify_stage_checksums( $stage_abs, $state['slug'] );
+				if ( is_wp_error( $verified ) ) {
+					$state['status']   = 'error';
+					$state['errors'][] = $verified->get_error_message();
+					self::empty_directory( $stage_abs );
+				}
+			}
+			if ( 'done' === $state['status'] ) {
+				$rollback = dirname( $plugin_abs ) . DIRECTORY_SEPARATOR . '.mvn-rollback-' . sanitize_key( $folder ) . '-' . gmdate( 'YmdHis' );
+				if ( is_dir( $plugin_abs ) && ! @rename( $plugin_abs, $rollback ) ) {
+					$state['status']   = 'error';
+					$state['errors'][] = 'جابجایی نسخه فعلی برای rollback ناموفق بود';
+				} elseif ( ! @rename( $stage_abs, $plugin_abs ) ) {
+					if ( is_dir( $rollback ) ) {
+						@rename( $rollback, $plugin_abs );
+					}
+					$state['status']   = 'error';
+					$state['errors'][] = 'atomic swap ناموفق بود؛ نسخه قبلی بازگردانده شد';
+				} else {
+					$state['rollback_path'] = is_dir( $rollback ) ? $rollback : '';
+					mvn_invalidate_runtime_caches();
+				}
+			}
 			$state['finished_at'] = gmdate( 'c' );
 			$state['entries']     = array();
 			@unlink( $zip_path );
+			mvn_job_lock_release( 'filesystem_mutation', isset( $state['lock_token'] ) ? $state['lock_token'] : '' );
 			mvn_log(
 				'Plugin repair done: ' . $state['slug'] .
 				' written=' . $state['written'] .
@@ -305,6 +372,62 @@ class MVN_Plugin_Repair {
 
 	public static function get_state() {
 		return mvn_state_read( self::STATE_KEY );
+	}
+
+	/**
+	 * One-click rollback of the last completed directory swap.
+	 *
+	 * @return bool|WP_Error
+	 */
+	public static function rollback() {
+		$state = self::get_state();
+		if ( empty( $state['folder'] ) || empty( $state['rollback_path'] ) || ! is_dir( $state['rollback_path'] ) ) {
+			return new WP_Error( 'no_rollback', 'نسخه rollback در دسترس نیست.' );
+		}
+		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 300 );
+		if ( ! $lock ) {
+			return new WP_Error( 'job_locked', 'عملیات دیگری در حال اجراست.' );
+		}
+		$live   = self::plugin_dir( $state['folder'] );
+		$failed = dirname( $live ) . DIRECTORY_SEPARATOR . '.mvn-failed-' . sanitize_key( $state['folder'] ) . '-' . gmdate( 'YmdHis' );
+		$ok     = ( ! is_dir( $live ) || @rename( $live, $failed ) ) && @rename( $state['rollback_path'], $live );
+		if ( ! $ok && is_dir( $failed ) && ! is_dir( $live ) ) {
+			@rename( $failed, $live );
+		}
+		mvn_job_lock_release( 'filesystem_mutation', $lock );
+		mvn_invalidate_runtime_caches();
+		return $ok ? true : new WP_Error( 'rollback_fail', 'rollback پلاگین ناموفق بود.' );
+	}
+
+	private static function verify_stage_checksums( $stage, $slug ) {
+		$version = '';
+		foreach ( glob( $stage . '/*.php' ) ?: array() as $file ) {
+			$head = (string) @file_get_contents( $file, false, null, 0, 8192 );
+			if ( preg_match( '/^\s*\*?\s*Version:\s*(.+)$/mi', $head, $m ) ) {
+				$version = trim( $m[1] );
+				break;
+			}
+		}
+		if ( '' === $version ) {
+			return new WP_Error( 'package_version', 'نسخه پلاگین در staging قابل تشخیص نیست.' );
+		}
+		$url = sprintf( 'https://downloads.wordpress.org/plugin-checksums/%s/%s.json', rawurlencode( $slug ), rawurlencode( $version ) );
+		$res = MVN_URL_Trust::get( $url, array( 'timeout' => 30, 'limit_response_size' => 16 * MB_IN_BYTES ) );
+		$data = ! is_wp_error( $res ) ? json_decode( wp_remote_retrieve_body( $res ), true ) : null;
+		if ( ! is_array( $data ) || empty( $data['files'] ) ) {
+			return new WP_Error( 'package_checksums', 'checksum رسمی پلاگین در دسترس نیست؛ swap متوقف شد.' );
+		}
+		foreach ( $data['files'] as $rel => $expected ) {
+			if ( false !== strpos( $rel, '..' ) ) {
+				return new WP_Error( 'checksum_path', 'مسیر checksum نامعتبر است.' );
+			}
+			$expected = is_array( $expected ) ? reset( $expected ) : $expected;
+			$file = $stage . '/' . str_replace( '\\', '/', $rel );
+			if ( ! is_file( $file ) || ! hash_equals( strtolower( (string) $expected ), md5_file( $file ) ) ) {
+				return new WP_Error( 'checksum_mismatch', 'checksum فایل پلاگین مطابقت ندارد: ' . $rel );
+			}
+		}
+		return true;
 	}
 
 	/**

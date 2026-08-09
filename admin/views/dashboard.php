@@ -22,7 +22,26 @@ $cl_pending = max( 0, $cl_total - $cl_done );
 $ring_r    = 54;
 $ring_c    = 2 * M_PI * $ring_r;
 $ring_off  = $ring_c * ( 1 - ( $cl_pct / 100 ) );
+$incidents = isset( $incidents ) && is_array( $incidents ) ? $incidents : array();
+$open_incidents = array_filter( $incidents, static function ( $row ) { return isset( $row['status'] ) && in_array( $row['status'], array( 'open', 'failed' ), true ); } );
+$verified_incidents = array_filter( $incidents, static function ( $row ) { return isset( $row['status'] ) && 'verified' === $row['status']; } );
+$last_verified = $verified_incidents ? end( $verified_incidents ) : array();
+$sig_age = ! empty( $sig_pack['updated_at'] ) ? human_time_diff( strtotime( $sig_pack['updated_at'] ), time() ) : 'نامشخص';
+$data_outside = ! mvn_path_is_within( $data_dir, ABSPATH );
 ?>
+<div class="mvn-card">
+	<h2>سلامت موتور امنیت 2.0</h2>
+	<ul class="mvn-kv">
+		<li><span>سن بسته امضا</span><b><?php echo esc_html( $sig_age ); ?></b></li>
+		<li><span>Self-integrity افزونه</span><b class="<?php echo ! empty( $self_integrity['ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>"><?php echo ! empty( $self_integrity['ok'] ) ? 'تأییدشده' : 'تغییر/کمبود فایل'; ?></b></li>
+		<li><span>زمان‌بندی</span><b class="<?php echo empty( $schedule['cron_disabled'] ) ? 'mvn-ok' : 'mvn-warn'; ?>"><?php echo empty( $schedule['cron_disabled'] ) ? 'فعال' : 'WP-Cron غیرفعال؛ system cron لازم است'; ?></b></li>
+		<li><span>data-dir</span><b class="<?php echo $data_outside ? 'mvn-ok' : 'mvn-warn'; ?>"><?php echo $data_outside ? 'خارج webroot سایت' : 'fallback داخل webroot (payload رمزنگاری می‌شود)'; ?></b></li>
+		<li><span>رخدادهای باز/failed</span><b class="<?php echo $open_incidents ? 'mvn-bad' : 'mvn-ok'; ?>"><?php echo count( $open_incidents ); ?></b></li>
+		<li><span>آخرین پاک‌سازی verified</span><b><?php echo esc_html( ! empty( $last_verified['updated_at'] ) ? $last_verified['updated_at'] : '—' ); ?></b></li>
+		<li><span>Outbound anomaly</span><b><?php echo esc_html( ! empty( $audit_rows ) ? 'audit فعال' : 'موردی ثبت نشده' ); ?></b></li>
+	</ul>
+	<?php if ( ! empty( $schedule['cron_disabled'] ) ) : ?><code><?php echo esc_html( $schedule['system_cron'] ); ?></code><?php endif; ?>
+</div>
 <div class="mvn-card mvn-checklist-hero">
 	<div class="mvn-checklist-hero-inner">
 		<div class="mvn-checklist-ring-wrap" aria-hidden="true">

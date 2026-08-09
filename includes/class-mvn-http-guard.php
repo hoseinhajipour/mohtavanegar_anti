@@ -172,7 +172,8 @@ class MVN_Http_Guard {
 	 * @return string[]
 	 */
 	public static function allowed_hosts() {
-		return self::normalize_host_list( get_option( self::OPTION_ALLOWED, array() ) );
+		$required = class_exists( 'MVN_URL_Trust' ) ? MVN_URL_Trust::allowed_hosts() : array( 'api.wordpress.org', 'downloads.wordpress.org' );
+		return self::normalize_host_list( array_merge( get_option( self::OPTION_ALLOWED, array() ), $required ) );
 	}
 
 	/**

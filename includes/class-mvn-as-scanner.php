@@ -222,7 +222,7 @@ class MVN_AS_Scanner {
 			}
 		}
 
-		update_option( MVN_OPTION_ISSUES, MVN_Scanner::sort_issues( $existing ), false );
+		MVN_Incidents::store_issues( MVN_Scanner::sort_issues( $existing ) );
 	}
 
 	/**
@@ -794,7 +794,7 @@ class MVN_AS_Scanner {
 			$kept[] = $iss;
 		}
 		if ( count( $kept ) !== count( $issues ) ) {
-			update_option( MVN_OPTION_ISSUES, array_values( $kept ), false );
+			MVN_Incidents::store_issues( array_values( $kept ) );
 		}
 	}
 }

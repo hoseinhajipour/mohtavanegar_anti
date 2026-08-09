@@ -173,6 +173,24 @@ class MVN_Ghost_Plugins {
 	}
 
 	/**
+	 * Whether a db.php/advanced-cache/object-cache path is our temporary safe drop-in.
+	 *
+	 * @param string $abs Absolute path.
+	 */
+	public static function is_mvn_safe_dropin( $abs ) {
+		if ( ! is_file( $abs ) ) {
+			return false;
+		}
+		$head = (string) @file_get_contents( $abs, false, null, 0, 512 );
+		return false !== strpos( $head, 'MVN Safe DB Bootstrap' )
+			|| false !== strpos( $head, 'MVN Safe Cache' )
+			|| false !== strpos( $head, 'MVN Safe Object Cache' )
+			|| false !== strpos( $head, 'MVN Safe prepend stub' )
+			|| false !== strpos( $head, 'Neutralized by Mohtavanegar Antivirus' )
+			|| false !== strpos( $head, 'Neutralized by MVN Safe' );
+	}
+
+	/**
 	 * Discover malware persistence files in wp-content root (hex PHP, .user.ini, zip, bad db.php).
 	 *
 	 * @return string[] Relative paths.
@@ -183,9 +201,9 @@ class MVN_Ghost_Plugins {
 		if ( ! is_dir( $dir ) ) {
 			return $found;
 		}
-		$has_hex_php = false;
+		$has_hex_php    = false;
 		$has_mu_malware = false;
-		$mu = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : ( $dir . '/mu-plugins' );
+		$mu             = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : ( $dir . '/mu-plugins' );
 		if ( is_dir( $mu ) ) {
 			foreach ( scandir( $mu ) ?: array() as $entry ) {
 				if ( preg_match( '/zonal|xdav|security-helper|wp-[a-z0-9]{6}-loader/i', $entry ) ) {
@@ -198,6 +216,9 @@ class MVN_Ghost_Plugins {
 			if ( '.' === $entry || '..' === $entry || ! is_file( $dir . '/' . $entry ) ) {
 				continue;
 			}
+			if ( self::is_mvn_safe_dropin( $dir . '/' . $entry ) ) {
+				continue;
+			}
 			if ( preg_match( '/^\.?[a-f0-9]{6,16}\.php$/i', $entry ) ) {
 				$found[]     = 'wp-content/' . $entry;
 				$has_hex_php = true;
@@ -207,40 +228,42 @@ class MVN_Ghost_Plugins {
 				$found[] = 'wp-content/' . $entry;
 			}
 		}
-		// Early drop-ins that reinfect mu-plugins — remove whenever other IoCs exist.
 		$db = $dir . '/db.php';
-		if ( is_file( $db ) ) {
+		if ( is_file( $db ) && ! self::is_mvn_safe_dropin( $db ) ) {
 			$content = (string) @file_get_contents( $db );
-			$is_ours = ( false !== strpos( $content, 'MVN Safe DB Bootstrap' ) );
-			if ( ! $is_ours && ( $has_hex_php || $has_mu_malware || self::db_php_is_hostile( $content ) ) ) {
+			if ( $has_hex_php || $has_mu_malware || self::db_php_is_hostile( $content ) ) {
 				$found[] = 'wp-content/db.php';
 			}
 		}
-		$ac = $dir . '/advanced-cache.php';
-		if ( is_file( $ac ) && ( $has_hex_php || $has_mu_malware ) ) {
-			$ac_c = (string) @file_get_contents( $ac );
-			if ( false === strpos( $ac_c, 'MVN Safe' ) && ( self::db_php_is_hostile( $ac_c ) || $has_mu_malware ) ) {
-				$found[] = 'wp-content/advanced-cache.php';
+		foreach ( array( 'advanced-cache.php', 'object-cache.php' ) as $drop ) {
+			$abs = $dir . '/' . $drop;
+			if ( ! is_file( $abs ) || self::is_mvn_safe_dropin( $abs ) ) {
+				continue;
+			}
+			$raw = (string) @file_get_contents( $abs );
+			if ( $has_hex_php || $has_mu_malware || self::db_php_is_hostile( $raw ) ) {
+				$found[] = 'wp-content/' . $drop;
 			}
 		}
-		foreach ( array( ABSPATH . '.user.ini', ABSPATH . 'php.ini' ) as $abs ) {
-			if ( is_file( $abs ) ) {
-				$c = (string) @file_get_contents( $abs );
-				if ( preg_match( '/auto_prepend_file|auto_append_file/i', $c ) ) {
-					$found[] = mvn_rel_path( $abs );
-				}
+		// All ABSPATH / wp-content user.ini variants (not only prepend-marked).
+		foreach ( array( ABSPATH . '.user.ini', ABSPATH . 'user.ini', ABSPATH . 'php.ini' ) as $abs ) {
+			if ( is_file( $abs ) && ! self::is_mvn_safe_dropin( $abs ) ) {
+				$found[] = mvn_rel_path( $abs );
 			}
 		}
-		return array_values( array_unique( $found ) );
+		return array_values( array_unique( array_filter( $found ) ) );
 	}
 
 	/**
-	 * Hostile markers for db.php / advanced-cache.php drop-ins.
+	 * Hostile markers for db.php / advanced-cache.php / object-cache.php drop-ins.
 	 *
 	 * @param string $content File contents.
 	 */
 	private static function db_php_is_hostile( $content ) {
 		if ( '' === $content ) {
+			return false;
+		}
+		if ( false !== strpos( $content, 'MVN Safe' ) ) {
 			return false;
 		}
 		if ( preg_match( '/\b(?:eval|assert|gzinflate|gzuncompress|str_rot13)\s*\(/i', $content )
@@ -250,30 +273,402 @@ class MVN_Ghost_Plugins {
 		if ( preg_match( '/auto_prepend_file|zonal-runner|xdav|mu-plugins.*file_put_contents|\\\\x[0-9a-f]{2}\\\\x[0-9a-f]{2}/i', $content ) ) {
 			return true;
 		}
-		if ( substr_count( $content, '\\x' ) > 80 && ! preg_match( '/wpdb|DB_HOST|mysqli_connect|hyperdb|Query Monitor/i', $content ) ) {
+		if ( substr_count( $content, '\\x' ) > 80 && ! preg_match( '/wpdb|DB_HOST|mysqli_connect|hyperdb|Query Monitor|WP_Object_Cache/i', $content ) ) {
 			return true;
 		}
 		return false;
 	}
 
 	/**
-	 * Force-delete a file: chmod → quarantine → unlink → rename into mvn-data/kill.
+	 * Try to clear immutable / system attributes before unlink.
+	 *
+	 * @param string $abs Absolute path.
+	 */
+	private static function try_clear_file_attrs( $abs ) {
+		if ( ! is_string( $abs ) || '' === $abs || ! is_file( $abs ) ) {
+			return;
+		}
+		$escaped = escapeshellarg( $abs );
+		$cmds    = array();
+		if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
+			$cmds[] = 'attrib -R -S -H ' . $escaped;
+		} else {
+			$cmds[] = 'chattr -i ' . $escaped . ' 2>/dev/null';
+			$cmds[] = 'chattr -a ' . $escaped . ' 2>/dev/null';
+		}
+		foreach ( $cmds as $cmd ) {
+			if ( function_exists( 'exec' ) ) {
+				@exec( $cmd );
+			} elseif ( function_exists( 'shell_exec' ) ) {
+				@shell_exec( $cmd );
+			}
+		}
+		@chmod( $abs, 0644 );
+	}
+
+	/**
+	 * Resolve a site-relative path while respecting a custom WP_CONTENT_DIR.
+	 *
+	 * @param string $rel Relative path.
+	 * @return string|false
+	 */
+	private static function resolve_rel_path( $rel ) {
+		$rel = ltrim( str_replace( '\\', '/', (string) $rel ), '/' );
+		if ( '' === $rel || false !== strpos( $rel, '..' ) ) {
+			return false;
+		}
+		if ( 0 === strpos( $rel, 'wp-content/' ) ) {
+			return rtrim( WP_CONTENT_DIR, '/\\' ) . '/' . substr( $rel, strlen( 'wp-content/' ) );
+		}
+		return mvn_abs_path( $rel );
+	}
+
+	/**
+	 * Try to set the immutable attribute so malware cannot overwrite our stub.
+	 *
+	 * @param string $abs Absolute path.
+	 */
+	private static function try_set_immutable( $abs ) {
+		if ( ! is_string( $abs ) || '' === $abs || ! is_file( $abs ) ) {
+			return;
+		}
+		if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
+			return; // no chattr on Windows dev; host is Linux.
+		}
+		$cmd = 'chattr +i ' . escapeshellarg( $abs ) . ' 2>/dev/null';
+		if ( function_exists( 'exec' ) ) {
+			@exec( $cmd );
+		} elseif ( function_exists( 'shell_exec' ) ) {
+			@shell_exec( $cmd );
+		}
+		$manifest = mvn_state_read( 'immutable_manifest', array( 'files' => array() ) );
+		$manifest['files'][ mvn_normalize_path( $abs ) ] = array(
+			'locked_at' => gmdate( 'c' ),
+			'sha256'    => @hash_file( 'sha256', $abs ),
+		);
+		mvn_state_write( 'immutable_manifest', $manifest );
+	}
+
+	/**
+	 * Release only immutable files recorded by MVN.
+	 *
+	 * @return array{released:string[],errors:string[]}
+	 */
+	public static function release_immutable_locks() {
+		$out      = array( 'released' => array(), 'errors' => array() );
+		$manifest = mvn_state_read( 'immutable_manifest', array( 'files' => array() ) );
+		foreach ( isset( $manifest['files'] ) ? $manifest['files'] : array() as $abs => $info ) {
+			if ( false === mvn_safe_write_path( $abs ) ) {
+				$out['errors'][] = $abs . ': outside allowed roots';
+				continue;
+			}
+			self::try_clear_file_attrs( $abs );
+			$out['released'][] = mvn_rel_path( $abs );
+		}
+		mvn_state_delete( 'immutable_manifest' );
+		return $out;
+	}
+
+	/**
+	 * Overwrite a PHP file with a harmless stub (defeats cached auto_prepend / open handles).
+	 *
+	 * @param string $abs  Absolute path.
+	 * @param bool   $lock Attempt to lock immutable afterwards.
+	 * @return bool True if neutralized.
+	 */
+	public static function neutralize_php_file( $abs, $lock = false ) {
+		if ( ! is_string( $abs ) || '' === $abs || ! is_file( $abs ) ) {
+			return false;
+		}
+		self::try_clear_file_attrs( $abs );
+		@chmod( $abs, 0644 );
+		$stub = "<?php\n/* Neutralized by Mohtavanegar Antivirus (MVN Safe stub). */\n";
+		$ok   = mvn_atomic_write( $abs, $stub, 0644 );
+		if ( $ok && $lock ) {
+			self::try_set_immutable( $abs );
+		}
+		return $ok;
+	}
+
+	/**
+	 * Parse auto_prepend/append targets from ini/htaccess content, resolved against $base_dir.
+	 *
+	 * @param string $content  File contents.
+	 * @param string $base_dir Directory of the ini/htaccess file.
+	 * @return string[] Absolute target paths.
+	 */
+	private static function parse_prepend_targets( $content, $base_dir ) {
+		$targets = array();
+		if ( '' === (string) $content ) {
+			return $targets;
+		}
+		if ( preg_match_all( '/auto_(?:pre|ap)pend_file\s*[=\s]\s*["\']?([^"\'\r\n;]+)/i', $content, $m ) ) {
+			foreach ( $m[1] as $raw ) {
+				$raw = trim( $raw );
+				if ( '' === $raw || 'none' === strtolower( $raw ) ) {
+					continue;
+				}
+				$abs = $raw;
+				if ( ! preg_match( '#^(?:/|[A-Za-z]:[\\\\/])#', $raw ) ) {
+					$abs = rtrim( $base_dir, '/\\' ) . '/' . ltrim( $raw, '/\\' );
+				}
+				$real = @realpath( $abs );
+				$targets[] = $real ? $real : $abs;
+			}
+		}
+		return array_values( array_unique( $targets ) );
+	}
+
+	/**
+	 * Require a path IoC or at least three independent behavior signals before deletion.
+	 *
+	 * @param string $path Candidate file.
+	 * @return bool
+	 */
+	private static function file_has_confirmed_ioc( $path ) {
+		$name = basename( $path );
+		if ( preg_match( '/zonal|xdav|security[-_]?helper|^\\.?[a-f0-9]{8,16}\\.(?:php|phtml|zip)$/i', $name ) ) {
+			return true;
+		}
+		if ( ! is_file( $path ) || filesize( $path ) > 4 * MB_IN_BYTES ) {
+			return false;
+		}
+		$content = (string) @file_get_contents( $path );
+		if ( self::is_mvn_safe_dropin( $path, $content ) ) {
+			return false;
+		}
+		$signals  = preg_match( '/(?:eval|assert|system|shell_exec|passthru)\s*\(/i', $content ) ? 1 : 0;
+		$signals += preg_match( '/(?:base64_decode|gzinflate|str_rot13|pack)\s*\(/i', $content ) ? 1 : 0;
+		$signals += preg_match( '/(?:file_put_contents|fwrite|copy|rename)\s*\(/i', $content ) ? 1 : 0;
+		$signals += preg_match( '/auto_prepend|mu-plugins|db\.php|zonal|xdav/i', $content ) ? 1 : 0;
+		$signals += preg_match( '/\$_(?:POST|GET|REQUEST|COOKIE)\b/i', $content ) ? 1 : 0;
+		return $signals >= 3;
+	}
+
+	/**
+	 * Neutralize the auto_prepend chain: stub+lock the prepend target(s), empty+lock the ini.
+	 *
+	 * PHP caches .user.ini for up to user_ini.cache_ttl (300s), so deleting it is not enough.
+	 * We instead point/keep the include at a harmless locked stub so cached directives are inert.
+	 *
+	 * @return array{neutralized:string[],errors:string[]}
+	 */
+	public static function neutralize_auto_prepend_chain() {
+		$out  = array(
+			'neutralized' => array(),
+			'errors'      => array(),
+		);
+		$dirs = array( ABSPATH, WP_CONTENT_DIR, dirname( ABSPATH ) );
+		$dirs = array_values( array_unique( array_filter( $dirs ) ) );
+		$inis = array();
+		foreach ( $dirs as $d ) {
+			foreach ( array( '.user.ini', 'user.ini', 'php.ini', '.htaccess' ) as $name ) {
+				$p = rtrim( $d, '/\\' ) . '/' . $name;
+				if ( is_file( $p ) ) {
+					$inis[ $p ] = true;
+				}
+			}
+		}
+		foreach ( array_keys( $inis ) as $ini ) {
+			$content = (string) @file_get_contents( $ini );
+			if ( false !== strpos( $content, 'MVN Safe' ) ) {
+				continue;
+			}
+			$targets = self::parse_prepend_targets( $content, dirname( $ini ) );
+			$malicious_chain = false;
+			foreach ( $targets as $target ) {
+				$suspicious_path = (bool) preg_match( '/zonal|xdav|security[-_]?helper|[a-f0-9]{8,16}\.php/i', $target );
+				if ( is_file( $target ) && self::file_has_confirmed_ioc( $target ) ) {
+					$malicious_chain = true;
+					if ( self::neutralize_php_file( $target, true ) ) {
+						$out['neutralized'][] = mvn_rel_path( $target ) . ' (prepend target — stub+lock)';
+					}
+				} elseif ( ! is_file( $target ) && $suspicious_path ) {
+					$malicious_chain = true;
+					// Create harmless locked stub so the cached directive stays inert.
+					$dir = dirname( $target );
+					if ( is_dir( $dir ) && mvn_atomic_write( $target, "<?php\n/* MVN Safe prepend stub. */\n", 0644 ) ) {
+						self::try_set_immutable( $target );
+						$out['neutralized'][] = mvn_rel_path( $target ) . ' (prepend stub created+lock)';
+					}
+				}
+			}
+			if ( ! $malicious_chain ) {
+				continue;
+			}
+			$base = basename( $ini );
+			$pattern = '.htaccess' === $base
+				? '/^\s*php_(?:value|flag)\s+auto_(?:pre|ap)pend_file.*(?:\R|$)/im'
+				: '/^\s*auto_(?:pre|ap)pend_file\s*=.*(?:\R|$)/im';
+			$clean = preg_replace( $pattern, '', $content );
+			self::try_clear_file_attrs( $ini );
+			if ( is_string( $clean ) && $clean !== $content && mvn_atomic_write( $ini, $clean, 0644 ) ) {
+				@chmod( $ini, 0644 );
+				self::try_set_immutable( $ini );
+				$out['neutralized'][] = mvn_rel_path( $ini ) . ' (malicious prepend removed+lock)';
+			} else {
+				$out['errors'][] = 'خنثی‌سازی ناموفق: ' . mvn_rel_path( $ini );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Remove WP-Cron events whose hook/args reference the malware family (reinfection scheduler).
+	 *
+	 * @return string[] Removed hook labels.
+	 */
+	public static function purge_malicious_cron() {
+		$removed = array();
+		$cron    = get_option( 'cron' );
+		if ( ! is_array( $cron ) ) {
+			return $removed;
+		}
+		$needle = '/zonal|xdav|security[-_]?helper|wp[-_]?compat|(?:^|[\/\\\\])[a-f0-9]{8,16}\.php|auto_prepend/i';
+		$changed = false;
+		foreach ( $cron as $ts => $hooks ) {
+			if ( ! is_array( $hooks ) ) {
+				continue;
+			}
+			foreach ( $hooks as $hook => $events ) {
+				$blob = $hook . ' ' . wp_json_encode( $events );
+				if ( 'version' === $hook || ! preg_match( $needle, (string) $blob ) ) {
+					continue;
+				}
+				unset( $cron[ $ts ][ $hook ] );
+				$removed[] = (string) $hook;
+				$changed   = true;
+				if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+					@wp_clear_scheduled_hook( $hook );
+				}
+			}
+			if ( empty( $cron[ $ts ] ) ) {
+				unset( $cron[ $ts ] );
+			}
+		}
+		if ( $changed ) {
+			MVN_Quarantine::store_text(
+				'db:options:cron',
+				wp_json_encode( get_option( 'cron' ) ),
+				array( 'reason' => 'pre-cron-remediation-snapshot' )
+			);
+			update_option( 'cron', $cron );
+			mvn_invalidate_runtime_caches();
+		}
+		return array_values( array_unique( array_filter( $removed ) ) );
+	}
+
+	/**
+	 * Hunt reinfection droppers across wp-content (bounded) and neutralize+delete them.
+	 *
+	 * A dropper is a PHP file that writes db.php / mu-plugins / hex shells / advanced-cache
+	 * on each request. It is the source that keeps recreating IoCs.
+	 *
+	 * @param int $max_files Scan cap to avoid timeouts.
+	 * @return array{neutralized:string[],errors:string[]}
+	 */
+	public static function hunt_reinfection_sources( $max_files = 20000 ) {
+		$out = array(
+			'neutralized' => array(),
+			'errors'      => array(),
+		);
+		$root = WP_CONTENT_DIR;
+		if ( ! is_dir( $root ) ) {
+			return $out;
+		}
+		$self_dir = defined( 'MVN_PLUGIN_DIR' ) ? rtrim( str_replace( '\\', '/', MVN_PLUGIN_DIR ), '/' ) : '';
+		$data_dir = str_replace( '\\', '/', mvn_data_dir() );
+		$write_fn = '/\b(?:file_put_contents|fwrite|fputs|fopen|copy|rename|move_uploaded_file)\s*\(/i';
+		$target_re = '/mu-plugins|db\.php|advanced-cache|object-cache|\.user\.ini|auto_prepend|zonal|xdav|[a-f0-9]{8,16}\.(?:php|zip)/i';
+		$evasion   = '/eval\s*\(|assert\s*\(|gzinflate\s*\(|gzuncompress\s*\(|str_rot13\s*\(|base64_decode\s*\(|create_function\s*\(|\$[a-z_]+\s*\(\s*\$/i';
+		$count = 0;
+		try {
+			$it = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS ),
+				RecursiveIteratorIterator::SELF_FIRST
+			);
+		} catch ( \Exception $e ) {
+			$out['errors'][] = 'اسکن dropper ناموفق: ' . $e->getMessage();
+			return $out;
+		}
+		foreach ( $it as $file ) {
+			if ( $count >= $max_files ) {
+				break;
+			}
+			if ( ! $file->isFile() ) {
+				continue;
+			}
+			$path = str_replace( '\\', '/', $file->getPathname() );
+			if ( ( '' !== $self_dir && 0 === strpos( $path, $self_dir ) )
+				|| 0 === strpos( $path, $data_dir ) ) {
+				continue;
+			}
+			$ext = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
+			if ( ! in_array( $ext, array( 'php', 'phtml', 'php5', 'php7', 'php8', 'inc', 'suspected' ), true ) ) {
+				continue;
+			}
+			$count++;
+			$size = $file->getSize();
+			if ( $size < 40 || $size > 3145728 ) { // 3MB cap.
+				continue;
+			}
+			$base = basename( $path );
+			if ( 0 === strpos( $base, 'zz-mvn-kill-' ) ) {
+				continue;
+			}
+			$raw = (string) @file_get_contents( $path );
+			if ( '' === $raw || false !== strpos( $raw, 'MVN Safe' ) ) {
+				continue;
+			}
+			$rel_in_uploads = ( false !== strpos( $path, '/uploads/' ) );
+			$has_write      = (bool) preg_match( $write_fn, $raw );
+			// Strong signals (low false-positive) — legit cache plugins won't match these.
+			$strong_name = (bool) preg_match( '/zonal[-_]?runner|xdav[-_]?tracker|security[-_]?helper/i', $raw );
+			$hex_write   = $has_write && preg_match( '/[a-f0-9]{8,16}\.(?:php|zip)/i', $raw );
+			$obf_write   = $has_write && preg_match( $target_re, $raw ) && preg_match( $evasion, $raw );
+			$upload_shell = $rel_in_uploads && preg_match( '/<\?php/i', $raw ) && preg_match( $evasion, $raw );
+			$is_dropper   = ( $strong_name && ( $has_write || $rel_in_uploads ) )
+				|| $hex_write || $obf_write || $upload_shell;
+			if ( ! $is_dropper ) {
+				continue;
+			}
+			$rel = mvn_rel_path( $path );
+			$del  = self::force_delete_file( $rel, 'reinfection_dropper' );
+			if ( is_wp_error( $del ) ) {
+				// force_delete_file preserves evidence first and neutralizes before unlink.
+				$out['neutralized'][] = $rel . ' (خنثی شد ولی حذف قفل بود)';
+				$out['errors'][]      = $del->get_error_message();
+			} else {
+				$out['neutralized'][] = $rel;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Force-delete a file: clear attrs → quarantine evidence → neutralize → unlink/rename; verify gone.
 	 *
 	 * @param string $rel Relative path.
 	 * @param string $reason Quarantine reason.
 	 * @return true|WP_Error
 	 */
 	public static function force_delete_file( $rel, $reason = 'malware_persistence' ) {
-		$abs = mvn_abs_path( $rel );
+		$abs = self::resolve_rel_path( $rel );
 		if ( ! $abs || ! is_file( $abs ) ) {
 			return true;
 		}
+		self::try_clear_file_attrs( $abs );
 		@chmod( $abs, 0644 );
+		// Preserve the original evidence before overwriting executable content.
 		MVN_Quarantine::store( $rel, array( 'reason' => $reason ) );
-		if ( @unlink( $abs ) ) {
+		// Neutralize executable content first so a locked/cached-include copy is inert.
+		$ext = strtolower( pathinfo( $abs, PATHINFO_EXTENSION ) );
+		if ( in_array( $ext, array( 'php', 'phtml', 'php5', 'php7', 'php8', 'inc' ), true ) ) {
+			@file_put_contents( $abs, "<?php\n/* removed by MVN */\n" );
+		}
+		if ( @unlink( $abs ) && ! is_file( $abs ) ) {
 			return true;
 		}
-		// Rename aside even if file is open (common for db.php drop-in).
 		$kill_root = mvn_data_dir() . '/kill';
 		if ( ! is_dir( $kill_root ) ) {
 			wp_mkdir_p( $kill_root );
@@ -282,7 +677,9 @@ class MVN_Ghost_Plugins {
 		if ( @rename( $abs, $dest ) ) {
 			@chmod( $dest, 0644 );
 			@unlink( $dest );
-			return true;
+			if ( ! is_file( $abs ) ) {
+				return true;
+			}
 		}
 		$alt = $abs . '.__mvn_dead_' . gmdate( 'YmdHis' );
 		if ( @rename( $abs, $alt ) ) {
@@ -291,33 +688,171 @@ class MVN_Ghost_Plugins {
 				return true;
 			}
 		}
-		return new WP_Error(
-			'force_unlink_fail',
-			'حذف قفل‌شده ناموفق: ' . $rel . ' — از File Manager تیک Trash را بردارید یا با SSH: chattr -i && rm -f'
-		);
+		if ( is_file( $abs ) ) {
+			return new WP_Error(
+				'force_unlink_fail',
+				'حذف قفل‌شده ناموفق: ' . $rel . ' — از File Manager تیک Trash را بردارید یا با SSH: chattr -i && rm -f'
+			);
+		}
+		return true;
 	}
 
 	/**
-	 * Neutralize early drop-ins (db.php / advanced-cache.php) that reinfect before MU loads.
+	 * Whether path is our intentional safe db.php (skip delete).
 	 *
-	 * @return array{deleted:string[],errors:string[],safe_db:string}
+	 * @param string $rel Relative path.
+	 */
+	public static function is_safe_db_rel( $rel ) {
+		if ( 'wp-content/db.php' !== $rel ) {
+			return false;
+		}
+		return self::is_mvn_safe_dropin( WP_CONTENT_DIR . '/db.php' );
+	}
+
+	/**
+	 * Delete discovered root/MU IoCs; only skip db.php when it is MVN safe bootstrap.
+	 *
+	 * @return array{deleted:string[],errors:string[]}
+	 */
+	public static function purge_discovered_iocs() {
+		$out = array(
+			'deleted' => array(),
+			'errors'  => array(),
+		);
+		foreach ( self::discover_wpcontent_root_iocs() as $rel ) {
+			if ( self::is_safe_db_rel( $rel ) ) {
+				continue;
+			}
+			if ( 'wp-content/db.php' === $rel || 'wp-content/advanced-cache.php' === $rel ) {
+				if ( self::is_mvn_safe_dropin( (string) self::resolve_rel_path( $rel ) ) ) {
+					continue;
+				}
+			}
+			$ok = self::force_delete_file( $rel, 'wpcontent_root_ioc' );
+			if ( is_wp_error( $ok ) ) {
+				$out['errors'][] = $ok->get_error_message();
+			} else {
+				$out['deleted'][] = $rel;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Empty known cache dirs used as reinfection staging (keep folder).
+	 *
+	 * @return array{deleted:string[],errors:string[]}
+	 */
+	public static function empty_cache_staging_dirs() {
+		$out = array(
+			'deleted' => array(),
+			'errors'  => array(),
+		);
+		foreach ( array( 'cache', 'wpo-cache' ) as $name ) {
+			$dir = WP_CONTENT_DIR . '/' . $name;
+			if ( ! is_dir( $dir ) ) {
+				continue;
+			}
+			$n = self::empty_directory_contents( $dir );
+			if ( $n > 0 ) {
+				$out['deleted'][] = 'wp-content/' . $name . '/* (' . $n . ')';
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Delete files/dirs inside a directory without removing the directory itself.
+	 *
+	 * @param string $dir Absolute directory.
+	 * @return int Removed entries.
+	 */
+	private static function empty_directory_contents( $dir ) {
+		$count = 0;
+		foreach ( scandir( $dir ) ?: array() as $entry ) {
+			if ( '.' === $entry || '..' === $entry ) {
+				continue;
+			}
+			$path = $dir . '/' . $entry;
+			if ( is_dir( $path ) ) {
+				$it = new RecursiveIteratorIterator(
+					new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS ),
+					RecursiveIteratorIterator::CHILD_FIRST
+				);
+				foreach ( $it as $file ) {
+					$file->isDir() ? @rmdir( $file->getPathname() ) : @unlink( $file->getPathname() );
+					$count++;
+				}
+				if ( @rmdir( $path ) ) {
+					$count++;
+				}
+			} elseif ( is_file( $path ) ) {
+				self::try_clear_file_attrs( $path );
+				if ( @unlink( $path ) ) {
+					$count++;
+				}
+			}
+		}
+		return $count;
+	}
+
+	/**
+	 * Reinstall safe drop-ins after a purge pass (undoes same-request overwrite).
+	 *
+	 * @return array{safe_db:string,safe_ac:string,errors:string[]}
+	 */
+	public static function reinstall_safe_dropins() {
+		$out = array(
+			'safe_db' => '',
+			'safe_ac' => '',
+			'errors'  => array(),
+		);
+		$db = self::install_safe_db_dropin();
+		if ( is_wp_error( $db ) ) {
+			$out['errors'][] = $db->get_error_message();
+		} else {
+			$out['safe_db'] = $db;
+		}
+		if ( ( defined( 'WP_CACHE' ) && WP_CACHE ) || is_file( WP_CONTENT_DIR . '/advanced-cache.php' ) ) {
+			$ac = self::install_safe_advanced_cache();
+			if ( is_wp_error( $ac ) ) {
+				$out['errors'][] = $ac->get_error_message();
+			} elseif ( $ac ) {
+				$out['safe_ac'] = $ac;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Neutralize early drop-ins (db.php / advanced-cache / object-cache) that reinfect before MU loads.
+	 *
+	 * @return array{deleted:string[],errors:string[],safe_db:string,safe_ac:string}
 	 */
 	public static function neutralize_early_dropins() {
 		$out = array(
 			'deleted' => array(),
 			'errors'  => array(),
 			'safe_db' => '',
+			'safe_ac' => '',
 		);
-		foreach ( array( 'wp-content/db.php', 'wp-content/advanced-cache.php' ) as $rel ) {
-			$abs = mvn_abs_path( $rel );
+		$targets = array( 'wp-content/db.php', 'wp-content/advanced-cache.php' );
+		$oc      = WP_CONTENT_DIR . '/object-cache.php';
+		if ( is_file( $oc ) && ! self::is_mvn_safe_dropin( $oc ) ) {
+			$oc_c = (string) @file_get_contents( $oc );
+			if ( self::db_php_is_hostile( $oc_c )
+				|| (bool) preg_grep( '/zonal|xdav|^\.?[a-f0-9]{6,16}\.php$/i', scandir( WP_CONTENT_DIR ) ?: array() ) ) {
+				$targets[] = 'wp-content/object-cache.php';
+			}
+		}
+		foreach ( $targets as $rel ) {
+			$abs = self::resolve_rel_path( $rel );
 			if ( ! $abs || ! is_file( $abs ) ) {
 				continue;
 			}
-			$content = (string) @file_get_contents( $abs );
-			if ( false !== strpos( $content, 'MVN Safe DB Bootstrap' ) || false !== strpos( $content, 'MVN Safe Cache' ) ) {
+			if ( self::is_mvn_safe_dropin( $abs ) ) {
 				continue;
 			}
-			// Always remove when called from purge on infected site.
 			$ok = self::force_delete_file( $rel, 'early_dropin_neutralize' );
 			if ( is_wp_error( $ok ) ) {
 				$out['errors'][] = $ok->get_error_message();
@@ -325,16 +860,14 @@ class MVN_Ghost_Plugins {
 				$out['deleted'][] = $rel;
 			}
 		}
-		// Optional: install a short-lived safe db.php that cleans then boots core wpdb.
-		$need_safe = is_dir( WP_CONTENT_DIR . '/mu-plugins' )
-			&& (bool) preg_grep( '/zonal|xdav/i', scandir( WP_CONTENT_DIR . '/mu-plugins' ) ?: array() );
-		if ( $need_safe || ! empty( $out['deleted'] ) ) {
-			$installed = self::install_safe_db_dropin();
-			if ( is_wp_error( $installed ) ) {
-				$out['errors'][] = $installed->get_error_message();
-			} else {
-				$out['safe_db'] = $installed;
-			}
+		$need_safe = ! empty( $out['deleted'] )
+			|| ( is_dir( WP_CONTENT_DIR . '/mu-plugins' )
+				&& (bool) preg_grep( '/zonal|xdav/i', scandir( WP_CONTENT_DIR . '/mu-plugins' ) ?: array() ) );
+		if ( $need_safe ) {
+			$re = self::reinstall_safe_dropins();
+			$out['safe_db'] = $re['safe_db'];
+			$out['safe_ac'] = $re['safe_ac'];
+			$out['errors']  = array_merge( $out['errors'], $re['errors'] );
 		}
 		return $out;
 	}
@@ -360,9 +893,37 @@ $__mvn_still = false;
 $__mvn_rm = static function ( $p ) {
 	if ( is_file( $p ) ) {
 		@chmod( $p, 0644 );
+		if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
 		if ( ! @unlink( $p ) ) { @rename( $p, $p . \'.__mvn_dead\' ); }
 	}
 };
+$__mvn_stub = static function ( $p ) {
+	if ( ! is_file( $p ) && ! is_dir( dirname( $p ) ) ) { return; }
+	if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
+	@chmod( $p, 0644 );
+	@file_put_contents( $p, "<?php\n/* MVN Safe prepend stub. */\n" );
+	if ( function_exists( \'exec\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
+};
+foreach ( array( ABSPATH, $__mvn_c, dirname( ABSPATH ) ) as $__d ) {
+	foreach ( array( \'.user.ini\', \'user.ini\' ) as $__n ) {
+		$__ini = rtrim( $__d, \'/\\\\\' ) . \'/\' . $__n;
+		if ( ! is_file( $__ini ) ) { continue; }
+		$__ic = (string) @file_get_contents( $__ini );
+		if ( false !== strpos( $__ic, \'MVN Safe\' ) || false !== strpos( $__ic, \'Neutralized\' ) ) { continue; }
+		if ( preg_match_all( \'/auto_(?:pre|ap)pend_file\\s*[=\\s]\\s*["\\\']?([^"\\\'\\r\\n;]+)/i\', $__ic, $__m ) ) {
+			foreach ( $__m[1] as $__t ) {
+				$__t = trim( $__t );
+				if ( \'\' === $__t || \'none\' === strtolower( $__t ) ) { continue; }
+				if ( ! preg_match( \'#^(?:/|[A-Za-z]:[\\\\/])#\', $__t ) ) { $__t = rtrim( $__d, \'/\\\\\' ) . \'/\' . ltrim( $__t, \'/\\\\\' ); }
+				$__mvn_stub( $__t );
+			}
+		}
+		if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
+		@chmod( $__ini, 0644 );
+		@file_put_contents( $__ini, "; Neutralized by MVN Safe\n" );
+		if ( function_exists( \'exec\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
+	}
+}
 $__mvn_mu = $__mvn_c . \'/mu-plugins\';
 if ( is_dir( $__mvn_mu ) ) {
 	foreach ( @scandir( $__mvn_mu ) ?: array() as $__e ) {
@@ -378,7 +939,19 @@ if ( is_dir( $__mvn_mu ) ) {
 }
 foreach ( @scandir( $__mvn_c ) ?: array() as $__e ) {
 	if ( preg_match( \'/^\\.?[a-f0-9]{6,16}\\.(?:php|zip)$/i\', $__e ) || in_array( $__e, array( \'.user.ini\', \'user.ini\' ), true ) ) {
-		$__mvn_rm( $__mvn_c . \'/\' . $__e );
+		$__p = $__mvn_c . \'/\' . $__e;
+		$__h = is_file( $__p ) ? (string) @file_get_contents( $__p, false, null, 0, 256 ) : \'\';
+		if ( false !== strpos( $__h, \'MVN Safe\' ) || false !== strpos( $__h, \'Neutralized by\' ) ) { continue; }
+		$__mvn_rm( $__p );
+	}
+}
+foreach ( array( \'advanced-cache.php\', \'object-cache.php\' ) as $__d ) {
+	$__p = $__mvn_c . \'/\' . $__d;
+	if ( ! is_file( $__p ) ) { continue; }
+	$__raw = (string) @file_get_contents( $__p );
+	if ( false !== strpos( $__raw, \'MVN Safe\' ) ) { continue; }
+	if ( preg_match( \'/eval|base64_decode|gzinflate|zonal|xdav/i\', $__raw ) ) {
+		$__mvn_rm( $__p );
 	}
 }
 foreach ( @scandir( $__mvn_c ) ?: array() as $__e ) {
@@ -387,18 +960,11 @@ foreach ( @scandir( $__mvn_c ) ?: array() as $__e ) {
 		break;
 	}
 }
-$__mvn_ac = $__mvn_c . \'/advanced-cache.php\';
-if ( is_file( $__mvn_ac ) ) {
-	$__raw = (string) @file_get_contents( $__mvn_ac );
-	if ( false === strpos( $__raw, \'MVN Safe\' ) && preg_match( \'/eval|base64_decode|gzinflate|zonal|xdav/i\', $__raw ) ) {
-		$__mvn_rm( $__mvn_ac );
-	}
-}
 if ( ! isset( $wpdb ) ) {
 	require_once ABSPATH . WPINC . \'/class-wpdb.php\';
 	$wpdb = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
 }
-if ( ! $__mvn_still || time() > $__mvn_expire ) {
+if ( time() > $__mvn_expire ) {
 	@unlink( __FILE__ );
 }
 ';
@@ -407,6 +973,34 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 		}
 		@chmod( $path, 0644 );
 		return 'wp-content/db.php';
+	}
+
+	/**
+	 * Temporary no-op advanced-cache so WP_CACHE sites do not fatal after malware AC removal.
+	 *
+	 * @return string|WP_Error|'' Relative path or empty if not needed.
+	 */
+	public static function install_safe_advanced_cache() {
+		$path = WP_CONTENT_DIR . '/advanced-cache.php';
+		if ( is_file( $path ) && self::is_mvn_safe_dropin( $path ) ) {
+			return 'wp-content/advanced-cache.php';
+		}
+		$expire = time() + ( 2 * DAY_IN_SECONDS );
+		$code   = '<?php
+/**
+ * MVN Safe Cache — temporary stub after malware advanced-cache removal.
+ * Safe to delete; auto-removes after TTL.
+ */
+if ( ! defined( \'ABSPATH\' ) ) { exit; }
+if ( time() > ' . (int) $expire . ' ) {
+	@unlink( __FILE__ );
+}
+';
+		if ( false === @file_put_contents( $path, $code ) ) {
+			return new WP_Error( 'safe_ac_write', 'نوشتن advanced-cache.php امن ناموفق بود.' );
+		}
+		@chmod( $path, 0644 );
+		return 'wp-content/advanced-cache.php';
 	}
 
 	/**
@@ -542,7 +1136,7 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 	 */
 	private static function audit_persistence_droppers( &$state ) {
 		foreach ( self::persistence_path_globs() as $rel ) {
-			$abs = mvn_abs_path( $rel );
+			$abs = self::resolve_rel_path( $rel );
 			if ( ! $abs || ! is_file( $abs ) ) {
 				continue;
 			}
@@ -891,49 +1485,137 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 	}
 
 	/**
+	 * Transactional ghost-admin remediation: dry-run -> demote (default) -> optional delete.
+	 *
+	 * @param int    $user_id User ID.
+	 * @param string $mode    dry-run|demote|delete.
+	 * @param string $confirm Token returned by dry-run; delete also needs DELETE:<login>.
+	 * @return array|WP_Error
+	 */
+	public static function remediate_ghost_admin( $user_id, $mode = 'dry-run', $confirm = '' ) {
+		global $wpdb;
+		$user_id = (int) $user_id;
+		if ( ! in_array( $user_id, self::ghost_admin_ids(), true ) ) {
+			return new WP_Error( 'not_ghost', 'این کاربر در فهرست ghost admin تأییدشده نیست.' );
+		}
+		$user = get_userdata( $user_id );
+		if ( ! $user ) {
+			return new WP_Error( 'missing_user', 'کاربر پیدا نشد.' );
+		}
+		$meta = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$wpdb->usermeta} WHERE user_id = %d", $user_id ), ARRAY_A );
+		$export = array(
+			'user' => $user->data,
+			'roles' => $user->roles,
+			'caps' => $user->caps,
+			'usermeta' => $meta,
+			'exported_at' => gmdate( 'c' ),
+		);
+		if ( 'dry-run' === $mode ) {
+			$token = wp_generate_password( 24, false, false );
+			set_transient( 'mvn_ghost_confirm_' . $user_id, hash( 'sha256', $token ), 10 * MINUTE_IN_SECONDS );
+			return array(
+				'mode' => 'dry-run',
+				'user_id' => $user_id,
+				'login' => $user->user_login,
+				'proposed' => 'demote',
+				'confirm_token' => $token,
+				'delete_phrase' => 'DELETE:' . $user->user_login,
+				'export' => $export,
+			);
+		}
+		$parts = explode( '|', (string) $confirm, 2 );
+		$valid = get_transient( 'mvn_ghost_confirm_' . $user_id );
+		if ( ! is_string( $valid ) || empty( $parts[0] ) || ! hash_equals( $valid, hash( 'sha256', $parts[0] ) ) ) {
+			return new WP_Error( 'confirmation_required', 'dry-run و توکن تأیید معتبر لازم است.' );
+		}
+		$snapshot = MVN_Quarantine::store_text(
+			'db:ghost-admin:' . $user_id,
+			wp_json_encode( $export ),
+			array( 'reason' => 'pre-ghost-admin-remediation', 'mode' => $mode )
+		);
+		if ( ! $snapshot ) {
+			return new WP_Error( 'snapshot_failed', 'export کامل کاربر قبل از تغییر ناموفق بود.' );
+		}
+		if ( 'delete' === $mode ) {
+			if ( 1 === $user_id ) {
+				return new WP_Error( 'protected_user', 'حذف user ID 1 توسط افزونه هرگز مجاز نیست.' );
+			}
+			if ( empty( $parts[1] ) || ! hash_equals( 'DELETE:' . $user->user_login, $parts[1] ) ) {
+				return new WP_Error( 'second_confirmation', 'برای حذف، تأیید دوم دقیق لازم است.' );
+			}
+			require_once ABSPATH . 'wp-admin/includes/user.php';
+			$result = wp_delete_user( $user_id );
+		} else {
+			$user->set_role( 'subscriber' );
+			if ( is_multisite() && is_super_admin( $user_id ) ) {
+				revoke_super_admin( $user_id );
+			}
+			$result = true;
+		}
+		delete_transient( 'mvn_ghost_confirm_' . $user_id );
+		return array( 'ok' => (bool) $result, 'mode' => $mode, 'snapshot' => $snapshot, 'user_id' => $user_id );
+	}
+
+	/**
 	 * Purge known malware plugin folders/files and scrub active_plugins + tracker options.
 	 *
-	 * Scrub DB first, rename folders out of plugins (breaks reload), then delete.
-	 * Active malware often restores itself on shutdown if we only unlink while loaded.
+	 * Multi-pass + shutdown re-clean: in-memory malware often rewrites IoCs after unlink
+	 * in the same request; a second pass and shutdown callback undo that.
 	 *
-	 * @return array{deleted:string[],renamed:string[],options:string[],usermeta:string[],active_scrubbed:int,errors:string[],kill_mu:string}
+	 * @return array{deleted:string[],renamed:string[],options:string[],usermeta:string[],active_scrubbed:int,errors:string[],kill_mu:string,verify_after_reload:bool}
 	 */
 	public static function purge_known() {
 		$result = array(
-			'deleted'         => array(),
-			'renamed'         => array(),
-			'options'         => array(),
-			'usermeta'        => array(),
-			'active_scrubbed' => 0,
-			'errors'          => array(),
-			'kill_mu'         => '',
+			'deleted'              => array(),
+			'renamed'              => array(),
+			'options'              => array(),
+			'usermeta'             => array(),
+			'active_scrubbed'      => 0,
+			'errors'               => array(),
+			'kill_mu'              => '',
+			'verify_after_reload'  => true,
 		);
 
 		mvn_ensure_data_dirs();
+		$result['prepend']     = array();
+		$result['droppers']    = array();
+		$result['cron_removed'] = array();
 
-		// 0) Neutralize db.php / advanced-cache.php FIRST — they load before MU and reinfect.
+		// 0a) Break the auto_prepend chain FIRST — it runs before WP and reinfects every request.
+		$chain = self::neutralize_auto_prepend_chain();
+		$result['prepend'] = array_merge( $result['prepend'], $chain['neutralized'] );
+		$result['errors']  = array_merge( $result['errors'], $chain['errors'] );
+
+		// 0b) Neutralize early drop-ins.
 		$early = self::neutralize_early_dropins();
 		$result['deleted'] = array_merge( $result['deleted'], $early['deleted'] );
 		$result['errors']  = array_merge( $result['errors'], $early['errors'] );
 		if ( ! empty( $early['safe_db'] ) ) {
 			$result['safe_db'] = $early['safe_db'];
 		}
+		if ( ! empty( $early['safe_ac'] ) ) {
+			$result['safe_ac'] = $early['safe_ac'];
+		}
+
+		// 0c) Remove malicious scheduled events (reinfection scheduler).
+		$result['cron_removed'] = self::purge_malicious_cron();
 
 		// 1) Scrub active_plugins.
 		$result['active_scrubbed'] = self::scrub_active_plugins();
 
-		// 1b) Kill remaining wp-content root / mu IoCs (.user.ini, hex PHP, zonal MU file).
-		foreach ( self::discover_wpcontent_root_iocs() as $rel ) {
-			if ( 'wp-content/db.php' === $rel ) {
-				continue; // handled / replaced by safe bootstrap
-			}
-			$ok = self::force_delete_file( $rel, 'wpcontent_root_ioc' );
-			if ( is_wp_error( $ok ) ) {
-				$result['errors'][] = $ok->get_error_message();
-			} else {
-				$result['deleted'][] = $rel;
-			}
-		}
+		// 1b) Pass 1: root / MU IoCs (conditional skip of safe db only).
+		$pass1 = self::purge_discovered_iocs();
+		$result['deleted'] = array_merge( $result['deleted'], $pass1['deleted'] );
+		$result['errors']  = array_merge( $result['errors'], $pass1['errors'] );
+
+		// 1c) Hunt the reinfection dropper across wp-content (the source that recreates IoCs).
+		$hunt = self::hunt_reinfection_sources();
+		$result['droppers'] = array_merge( $result['droppers'], $hunt['neutralized'] );
+		$result['errors']   = array_merge( $result['errors'], $hunt['errors'] );
+
+		$cache = self::empty_cache_staging_dirs();
+		$result['deleted'] = array_merge( $result['deleted'], $cache['deleted'] );
+		$result['errors']  = array_merge( $result['errors'], $cache['errors'] );
 
 		$dir              = WP_PLUGIN_DIR;
 		$folders_to_purge = self::discover_malware_folders();
@@ -966,78 +1648,44 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 		}
 
 		foreach ( self::malware_basenames() as $name ) {
-			$abs = $dir . '/' . $name;
 			$rel = 'wp-content/plugins/' . $name;
-			if ( ! is_file( $abs ) ) {
+			if ( ! is_file( $dir . '/' . $name ) ) {
 				continue;
 			}
-			$id = MVN_Quarantine::store( $rel, array( 'reason' => 'known_malware_plugin' ) );
-			if ( ! $id ) {
-				$result['errors'][] = 'قرنطینه ناموفق: ' . $rel;
-				continue;
-			}
-			if ( @unlink( $abs ) ) {
-				$result['deleted'][] = $rel;
+			$ok = self::force_delete_file( $rel, 'known_malware_plugin' );
+			if ( is_wp_error( $ok ) ) {
+				$result['errors'][] = $ok->get_error_message();
 			} else {
-				$alt = $abs . '.__mvn_dead_' . gmdate( 'YmdHis' );
-				if ( @rename( $abs, $alt ) ) {
-					@unlink( $alt );
-					$result['deleted'][] = $rel . ' (rename)';
-				} else {
-					$result['errors'][] = 'حذف ناموفق (قفل فایل؟): ' . $rel;
-				}
+				$result['deleted'][] = $rel;
 			}
 		}
 
 		foreach ( self::persistence_path_globs() as $rel ) {
-			$abs = mvn_abs_path( $rel );
+			$abs = self::resolve_rel_path( $rel );
 			if ( ! $abs || ! is_file( $abs ) ) {
 				continue;
 			}
-			$id = MVN_Quarantine::store( $rel, array( 'reason' => 'malware_persistence_dropper' ) );
-			if ( $id && @unlink( $abs ) ) {
-				$result['deleted'][] = $rel;
-			} elseif ( ! $id ) {
-				$result['errors'][] = 'قرنطینه ناموفق: ' . $rel;
+			$ok = self::force_delete_file( $rel, 'malware_persistence_dropper' );
+			if ( is_wp_error( $ok ) ) {
+				$result['errors'][] = $ok->get_error_message();
 			} else {
-				$result['errors'][] = 'حذف ناموفق: ' . $rel;
+				$result['deleted'][] = $rel;
 			}
 		}
 
 		$mu = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : ( WP_CONTENT_DIR . '/mu-plugins' );
 		if ( is_dir( $mu ) ) {
-			foreach ( scandir( $mu ) ?: array() as $entry ) {
-				if ( '.' === $entry || '..' === $entry ) {
+			$iterator = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $mu, FilesystemIterator::SKIP_DOTS ),
+				RecursiveIteratorIterator::LEAVES_ONLY
+			);
+			foreach ( $iterator as $file ) {
+				$abs = $file->getPathname();
+				if ( ! $file->isFile() || 0 === strpos( basename( $abs ), 'zz-mvn-kill-' ) || ! self::file_has_confirmed_ioc( $abs ) ) {
 					continue;
 				}
-				if ( 0 === strpos( $entry, 'zz-mvn-kill-' ) ) {
-					continue;
-				}
-				$abs = $mu . '/' . $entry;
-				if ( is_dir( $abs ) ) {
-					$ok = self::quarantine_and_delete_tree( $abs, 'wp-content/mu-plugins/' . $entry );
-					if ( is_wp_error( $ok ) ) {
-						$result['errors'][] = $ok->get_error_message();
-					} else {
-						$result['deleted'][] = 'wp-content/mu-plugins/' . $entry . '/';
-					}
-					continue;
-				}
-				if ( ! is_file( $abs ) ) {
-					continue;
-				}
-				// Wipe ALL mu-plugin files on infected sites (except our killer). index.php included if non-empty.
-				if ( 'index.php' === $entry ) {
-					$c = (string) @file_get_contents( $abs );
-					if ( strlen( $c ) < 80 && false === stripos( $c, '<?php' ) ) {
-						continue;
-					}
-					if ( preg_match( '/^\s*<\?php\s*(?:\/\/.*)?\s*(?:silence|Quiet|deny)\b/is', $c ) && strlen( $c ) < 120 ) {
-						continue;
-					}
-				}
-				$rel = 'wp-content/mu-plugins/' . $entry;
-				$ok  = self::force_delete_file( $rel, 'mu_plugin_wipe' );
+				$rel = mvn_rel_path( $abs );
+				$ok  = self::force_delete_file( $rel, 'confirmed_mu_plugin_ioc' );
 				if ( is_wp_error( $ok ) ) {
 					$result['errors'][] = $ok->get_error_message();
 				} else {
@@ -1056,6 +1704,43 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 			$result['kill_mu'] = $kill;
 		}
 
+		// Pass 2: undo same-request reinfection + reinstall safe drop-ins.
+		$pass2 = self::purge_discovered_iocs();
+		$result['deleted'] = array_merge( $result['deleted'], $pass2['deleted'] );
+		$result['errors']  = array_merge( $result['errors'], $pass2['errors'] );
+		$re = self::reinstall_safe_dropins();
+		if ( ! empty( $re['safe_db'] ) ) {
+			$result['safe_db'] = $re['safe_db'];
+		}
+		if ( ! empty( $re['safe_ac'] ) ) {
+			$result['safe_ac'] = $re['safe_ac'];
+		}
+		$result['errors'] = array_merge( $result['errors'], $re['errors'] );
+
+		// Shutdown: malware often rewrites on shutdown after our deletes.
+		register_shutdown_function(
+			static function () {
+				if ( ! class_exists( 'MVN_Ghost_Plugins', false ) ) {
+					return;
+				}
+				MVN_Ghost_Plugins::neutralize_auto_prepend_chain();
+				MVN_Ghost_Plugins::purge_discovered_iocs();
+				MVN_Ghost_Plugins::empty_cache_staging_dirs();
+				MVN_Ghost_Plugins::reinstall_safe_dropins();
+				$mu = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : ( WP_CONTENT_DIR . '/mu-plugins' );
+				if ( is_dir( $mu ) ) {
+					foreach ( scandir( $mu ) ?: array() as $entry ) {
+						if ( preg_match( '/zonal|xdav|security-helper/i', $entry ) ) {
+							$abs = $mu . '/' . $entry;
+							if ( is_file( $abs ) ) {
+								MVN_Ghost_Plugins::force_delete_file( 'wp-content/mu-plugins/' . $entry, 'shutdown_reinfect' );
+							}
+						}
+					}
+				}
+			}
+		);
+
 		if ( function_exists( 'opcache_reset' ) ) {
 			@opcache_reset();
 		}
@@ -1063,6 +1748,9 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 		mvn_log(
 			'Ghost plugin purge: deleted=' . count( $result['deleted'] )
 			. ' renamed=' . count( $result['renamed'] )
+			. ' prepend=' . count( $result['prepend'] )
+			. ' droppers=' . count( $result['droppers'] )
+			. ' cron=' . count( $result['cron_removed'] )
 			. ' options=' . count( $result['options'] )
 			. ' usermeta=' . count( $result['usermeta'] )
 			. ' active_scrubbed=' . $result['active_scrubbed']
@@ -1161,7 +1849,7 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 	}
 
 	/**
-	 * One-shot MU-plugin that deletes reinfected malware folders early.
+	 * One-shot MU-plugin that deletes reinfected malware at include time (before plugins_loaded).
 	 *
 	 * @param string[] $slugs Slugs.
 	 * @return string|WP_Error
@@ -1177,25 +1865,32 @@ if ( ! $__mvn_still || time() > $__mvn_expire ) {
 		$export = var_export( $slugs, true );
 		$ttl    = time() + ( 2 * DAY_IN_SECONDS );
 		$name   = 'zz-mvn-kill-malware.php';
+		// Cleanup runs at file top-level so it executes as soon as this MU is included
+		// (after alphabetically-earlier malware MUs on first load; before plugins_loaded).
 		$code   = '<?php
 /**
  * Plugin Name: MVN One-Shot Malware Killer
- * Description: Auto-generated by Mohtavanegar Antivirus. Deletes reinfectors early each request.
+ * Description: Auto-generated by Mohtavanegar Antivirus. Deletes reinfectors at MU load time.
  */
 if ( ! defined( \'ABSPATH\' ) ) { exit; }
-add_action( \'plugins_loaded\', function () {
+$__mvn_kill = static function () {
 	$expire = ' . $ttl . ';
 	$slugs  = ' . $export . ';
 	$dir    = defined( \'WP_PLUGIN_DIR\' ) ? WP_PLUGIN_DIR : ( WP_CONTENT_DIR . \'/plugins\' );
 	$content = WP_CONTENT_DIR;
 	$mu = $content . \'/mu-plugins\';
 	$still  = false;
-	$rm = function ( $path ) {
+	$self = __FILE__;
+	$safe = static function ( $path ) {
+		if ( ! is_file( $path ) ) { return false; }
+		$head = (string) @file_get_contents( $path, false, null, 0, 256 );
+		return false !== strpos( $head, \'MVN Safe\' ) || false !== strpos( $head, \'Neutralized by\' );
+	};
+	$rm = static function ( $path ) {
 		if ( is_file( $path ) ) {
 			@chmod( $path, 0644 );
-			if ( ! @unlink( $path ) ) {
-				@rename( $path, $path . \'.__mvn_dead\' );
-			}
+			if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $path ) . \' 2>/dev/null\' ); }
+			if ( ! @unlink( $path ) ) { @rename( $path, $path . \'.__mvn_dead\' ); }
 			return;
 		}
 		if ( ! is_dir( $path ) ) { return; }
@@ -1208,20 +1903,18 @@ add_action( \'plugins_loaded\', function () {
 		}
 		@rmdir( $path );
 	};
-	// Hostile early drop-ins (except our safe bootstrap).
-	foreach ( array( \'db.php\', \'advanced-cache.php\' ) as $drop ) {
+	foreach ( array( \'db.php\', \'advanced-cache.php\', \'object-cache.php\' ) as $drop ) {
 		$p = $content . \'/\' . $drop;
 		if ( ! is_file( $p ) ) { continue; }
 		$raw = (string) @file_get_contents( $p );
 		if ( false !== strpos( $raw, \'MVN Safe\' ) ) { continue; }
 		$rm( $p );
 	}
-	// MU reinfectors including zonal-runner-tap.php
 	if ( is_dir( $mu ) ) {
 		foreach ( @scandir( $mu ) ?: array() as $entry ) {
 			if ( \'.\' === $entry || \'..\' === $entry || 0 === strpos( $entry, \'zz-mvn-kill-\' ) ) { continue; }
+			if ( \'index.php\' === $entry ) { continue; }
 			if ( preg_match( \'/zonal|xdav|security-helper|wp-[a-z0-9]{6}-loader/i\', $entry ) || preg_match( \'/\\.php$/i\', $entry ) ) {
-				if ( \'index.php\' === $entry ) { continue; }
 				$rm( $mu . \'/\' . $entry );
 			}
 		}
@@ -1232,7 +1925,9 @@ add_action( \'plugins_loaded\', function () {
 	if ( is_dir( $content ) ) {
 		foreach ( @scandir( $content ) ?: array() as $entry ) {
 			if ( preg_match( \'/^\\.?[a-f0-9]{6,16}\\.(?:php|zip)$/i\', $entry ) || in_array( $entry, array( \'.user.ini\', \'user.ini\' ), true ) ) {
-				$rm( $content . \'/\' . $entry );
+				$path = $content . \'/\' . $entry;
+				if ( $safe( $path ) ) { continue; }
+				$rm( $path );
 			}
 		}
 		foreach ( @scandir( $content ) ?: array() as $entry ) {
@@ -1241,6 +1936,9 @@ add_action( \'plugins_loaded\', function () {
 				break;
 			}
 		}
+	}
+	foreach ( array( dirname( $content ) . \'/.user.ini\', ABSPATH . \'.user.ini\' ) as $ini ) {
+		if ( is_file( $ini ) && ! $safe( $ini ) ) { $rm( $ini ); }
 	}
 	if ( is_dir( $dir ) ) {
 		$targets = array();
@@ -1258,10 +1956,15 @@ add_action( \'plugins_loaded\', function () {
 			if ( is_dir( $dir . \'/\' . $slug ) ) { $still = true; break; }
 		}
 	}
-	if ( time() > $expire || ! $still ) {
-		@unlink( __FILE__ );
+	if ( time() > $expire ) {
+		@unlink( $self );
 	}
-}, 0 );
+};
+$__mvn_kill();
+if ( function_exists( \'add_action\' ) ) {
+	add_action( \'plugins_loaded\', $__mvn_kill, 0 );
+	add_action( \'shutdown\', $__mvn_kill, 999 );
+}
 ';
 		$abs = $mu . '/' . $name;
 		if ( false === @file_put_contents( $abs, $code ) ) {
@@ -1324,9 +2027,10 @@ add_action( \'plugins_loaded\', function () {
 			}
 		}
 
-		$persist = array();
+		$persist     = array();
+		$protections = array();
 		foreach ( self::persistence_path_globs() as $rel ) {
-			if ( is_file( (string) mvn_abs_path( $rel ) ) ) {
+			if ( is_file( (string) self::resolve_rel_path( $rel ) ) && ! in_array( $rel, $persist, true ) ) {
 				$persist[] = $rel;
 			}
 		}
@@ -1335,24 +2039,34 @@ add_action( \'plugins_loaded\', function () {
 				$persist[] = $rel;
 			}
 		}
-		$db_safe = WP_CONTENT_DIR . '/db.php';
-		if ( is_file( $db_safe ) ) {
-			$dbc = (string) @file_get_contents( $db_safe );
-			if ( false !== strpos( $dbc, 'MVN Safe DB Bootstrap' ) ) {
-				$persist[] = 'wp-content/db.php (db امن موقت MVN — پس از پاک‌سازی خودحذف می‌شود)';
+		foreach ( array( 'db.php', 'advanced-cache.php' ) as $drop ) {
+			$abs = WP_CONTENT_DIR . '/' . $drop;
+			if ( is_file( $abs ) && self::is_mvn_safe_dropin( $abs ) ) {
+				$label = 'wp-content/' . $drop . ( 'db.php' === $drop
+					? ' (db امن موقت MVN)'
+					: ' (cache امن موقت MVN)' );
+				if ( ! in_array( $label, $protections, true ) ) {
+					$protections[] = $label;
+				}
 			}
 		}
 		$mu = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : ( WP_CONTENT_DIR . '/mu-plugins' );
 		if ( is_dir( $mu ) ) {
 			foreach ( scandir( $mu ) ?: array() as $entry ) {
 				if ( 0 === strpos( $entry, 'zz-mvn-kill-' ) ) {
-					$persist[] = 'wp-content/mu-plugins/' . $entry . ' (قاتل موقت MVN)';
+					$label = 'wp-content/mu-plugins/' . $entry . ' (قاتل موقت MVN)';
+					if ( ! in_array( $label, $protections, true ) ) {
+						$protections[] = $label;
+					}
 					continue;
 				}
 				if ( preg_match( '/^wp-[a-z0-9]{6}-loader\.php$/i', $entry )
 					|| 0 === strcasecmp( $entry, '00-site-cache.php' )
 					|| preg_match( '/zonal|xdav|security-helper/i', $entry ) ) {
-					$persist[] = 'wp-content/mu-plugins/' . $entry;
+					$rel = 'wp-content/mu-plugins/' . $entry;
+					if ( ! in_array( $rel, $persist, true ) ) {
+						$persist[] = $rel;
+					}
 				}
 			}
 		}
@@ -1371,15 +2085,7 @@ add_action( \'plugins_loaded\', function () {
 				$tracker[] = $name;
 			}
 		}
-		$like_rows = $wpdb->get_col(
-			"SELECT option_name FROM {$wpdb->options}
-			WHERE option_name LIKE '%xdav%'
-			   OR option_name LIKE '%security_helper%'
-			   OR option_name LIKE '%security-helper%'
-			   OR option_name LIKE '%zonal%runner%'
-			   OR option_name LIKE '%zonal_runner%'
-			LIMIT 80"
-		);
+		$like_rows = self::tracker_option_names();
 		if ( is_array( $like_rows ) ) {
 			foreach ( $like_rows as $n ) {
 				if ( ! in_array( $n, $tracker, true ) && ! in_array( $n, mvn_db_protected_options(), true ) ) {
@@ -1399,7 +2105,8 @@ add_action( \'plugins_loaded\', function () {
 
 		return array(
 			'ioc_paths'          => $ioc,
-			'persistence'        => $persist,
+			'persistence'        => array_values( array_unique( $persist ) ),
+			'protections'        => array_values( array_unique( $protections ) ),
 			'hidden_plugins'     => $hidden,
 			'ghost_admins'       => count( $ghost_ids ),
 			'ghost_admin_sample' => $samples,
@@ -1556,15 +2263,7 @@ add_action( \'plugins_loaded\', function () {
 		global $wpdb;
 		$deleted = array();
 		$names   = self::malware_option_names();
-		$extra   = $wpdb->get_col(
-			"SELECT option_name FROM {$wpdb->options}
-			WHERE option_name LIKE '%xdav%'
-			   OR option_name LIKE '%security_helper%'
-			   OR option_name LIKE '%security-helper%'
-			   OR option_name LIKE '%zonal%runner%'
-			   OR option_name LIKE '%zonal_runner%'
-			LIMIT 80"
-		);
+		$extra   = self::tracker_option_names();
 		if ( is_array( $extra ) ) {
 			$names = array_unique( array_merge( $names, $extra ) );
 		}
@@ -1588,6 +2287,39 @@ add_action( \'plugins_loaded\', function () {
 			$deleted[] = $name;
 		}
 		return $deleted;
+	}
+
+	/**
+	 * Enumerate all tracker-like options with keyset pagination.
+	 *
+	 * @return string[]
+	 */
+	private static function tracker_option_names() {
+		global $wpdb;
+		$names = array();
+		$last  = 0;
+		do {
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT option_id, option_name FROM {$wpdb->options}
+					WHERE option_id > %d AND (
+						option_name LIKE '%%xdav%%'
+						OR option_name LIKE '%%security_helper%%'
+						OR option_name LIKE '%%security-helper%%'
+						OR option_name LIKE '%%zonal%%runner%%'
+						OR option_name LIKE '%%zonal_runner%%'
+					)
+					ORDER BY option_id ASC LIMIT 500",
+					$last
+				),
+				ARRAY_A
+			);
+			foreach ( (array) $rows as $row ) {
+				$last    = max( $last, (int) $row['option_id'] );
+				$names[] = $row['option_name'];
+			}
+		} while ( count( (array) $rows ) === 500 );
+		return array_values( array_unique( $names ) );
 	}
 
 	/**

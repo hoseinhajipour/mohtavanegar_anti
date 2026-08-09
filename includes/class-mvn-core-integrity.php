@@ -572,6 +572,6 @@ class MVN_Core_Integrity {
 			}
 		}
 
-		update_option( MVN_OPTION_ISSUES, MVN_Scanner::sort_issues( $existing ), false );
+		MVN_Incidents::store_issues( MVN_Scanner::sort_issues( $existing ) );
 	}
 }

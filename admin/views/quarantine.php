@@ -6,7 +6,7 @@ $count = is_array( $items ) ? count( $items ) : 0;
 ?>
 <div class="mvn-card">
 	<h2>قرنطینه</h2>
-	<p>قبل از هر حذف یا پاکسازی، یک کپی از فایل در <code>wp-content/mvn-data/quarantine</code> ذخیره می‌شود. می‌توانید بازیابی یا حذف دائمی کنید.</p>
+	<p>قبل از هر حذف یا پاکسازی، یک snapshot در data-dir امن ذخیره می‌شود. بازیابی payload آلوده پیش‌فرض مسدود است.</p>
 
 	<?php if ( 0 === $count ) : ?>
 		<div class="mvn-empty">قرنطینه خالی است.</div>
