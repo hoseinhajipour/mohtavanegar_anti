@@ -1267,33 +1267,68 @@ if ( time() > ' . (int) $expire . ' ) {
 	 */
 	private static function audit_hidden_admins( &$state ) {
 		$ghost = self::ghost_admin_rows();
-		if ( empty( $ghost ) ) {
-			return;
+		if ( ! empty( $ghost ) ) {
+			foreach ( $ghost as $row ) {
+				$uid   = isset( $row['ID'] ) ? (int) $row['ID'] : 0;
+				$login = isset( $row['user_login'] ) ? $row['user_login'] : (string) $uid;
+				$rel   = 'db:users:' . $login . ':user_login';
+				$hash  = md5( wp_json_encode( $row ) );
+				if ( MVN_Scanner::add_finding(
+					$state,
+					array(
+						'source'   => 'db',
+						'table'    => 'users',
+						'row_id'   => $uid,
+						'column'   => 'user_login',
+						'row_key'  => $login,
+						'rel'      => $rel,
+						'sig'      => 'db_ghost_admin',
+						'label'    => 'ادمین مخفی (فقط در دیتابیس دیده می‌شود)',
+						'severity' => 'critical',
+						'detail'   => 'کاربر «' . $login . '» در SQL ادمین است ولی get_users آن را نشان نمی‌دهد — الگوی xdav / Zonal Runner / security-helper.',
+						'action'   => 'db_review',
+						'clean'    => 'none',
+						'snippet'  => $login . ' <' . ( isset( $row['user_email'] ) ? $row['user_email'] : '' ) . '>',
+					),
+					isset( $row['user_login'] ) ? $row['user_login'] : '',
+					$hash
+				) ) {
+					if ( ! isset( $state['stats']['critical'] ) ) {
+						$state['stats']['critical'] = 0;
+					}
+					$state['stats']['critical']++;
+					if ( ! isset( $state['stats']['db'] ) ) {
+						$state['stats']['db'] = 0;
+					}
+					$state['stats']['db']++;
+				}
+			}
 		}
 
-		foreach ( $ghost as $row ) {
+		foreach ( self::shell_admin_rows() as $row ) {
 			$uid   = isset( $row['ID'] ) ? (int) $row['ID'] : 0;
-			$login = isset( $row['user_login'] ) ? $row['user_login'] : (string) $uid;
-			$rel   = 'db:users:' . $login . ':user_login';
-			$hash  = md5( wp_json_encode( $row ) );
+			$login = isset( $row['user_login'] ) ? (string) $row['user_login'] : (string) $uid;
+			$email = isset( $row['user_email'] ) ? (string) $row['user_email'] : '';
+			$rel   = 'db:users:' . $login . ':user_email';
+			$hash  = md5( 'shell_admin|' . $uid . '|' . $login . '|' . $email );
 			if ( MVN_Scanner::add_finding(
 				$state,
 				array(
 					'source'   => 'db',
 					'table'    => 'users',
 					'row_id'   => $uid,
-					'column'   => 'user_login',
+					'column'   => 'user_email',
 					'row_key'  => $login,
 					'rel'      => $rel,
-					'sig'      => 'db_ghost_admin',
-					'label'    => 'ادمین مخفی (فقط در دیتابیس دیده می‌شود)',
+					'sig'      => 'db_shell_admin',
+					'label'    => 'ادمین جعلی webshell (wp2shell / pattern)',
 					'severity' => 'critical',
-					'detail'   => 'کاربر «' . $login . '» در SQL ادمین است ولی get_users آن را نشان نمی‌دهد — الگوی xdav / Zonal Runner / security-helper.',
-					'action'   => 'db_review',
-					'clean'    => 'none',
-					'snippet'  => $login . ' <' . ( isset( $row['user_email'] ) ? $row['user_email'] : '' ) . '>',
+					'detail'   => 'کاربر ادمین با الگوی webshell («' . $login . '» / ' . $email . ') — معمولاً توسط backdoor ساخته می‌شود.',
+					'action'   => 'db_delete_user',
+					'clean'    => 'delete_user',
+					'snippet'  => $login . ' <' . $email . '>',
 				),
-				isset( $row['user_login'] ) ? $row['user_login'] : '',
+				$login . '|' . $email,
 				$hash
 			) ) {
 				if ( ! isset( $state['stats']['critical'] ) ) {
@@ -1306,6 +1341,93 @@ if ( time() > ' . (int) $expire . ' ) {
 				$state['stats']['db']++;
 			}
 		}
+	}
+
+	/**
+	 * Visible admins that match webshell persistence patterns (e.g. *@wp2shell.invalid).
+	 *
+	 * @return array<int,array{ID:int,user_login:string,user_email:string}>
+	 */
+	public static function shell_admin_rows() {
+		$out = array();
+		foreach ( self::sql_admin_ids() as $uid ) {
+			$user = get_userdata( $uid );
+			if ( ! $user ) {
+				continue;
+			}
+			$login = (string) $user->user_login;
+			$email = (string) $user->user_email;
+			if ( self::is_shell_admin_identity( $login, $email ) ) {
+				$out[] = array(
+					'ID'         => (int) $uid,
+					'user_login' => $login,
+					'user_email' => $email,
+				);
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @param string $login Login.
+	 * @param string $email Email.
+	 */
+	public static function is_shell_admin_identity( $login, $email ) {
+		$login = (string) $login;
+		$email = (string) $email;
+		if ( preg_match( '/wp2shell|shell\.invalid|(?:^|@)invalid$/i', $email ) ) {
+			return true;
+		}
+		if ( preg_match( '/^wp2_[a-f0-9]{8,}$/i', $login ) ) {
+			return true;
+		}
+		return (bool) apply_filters( 'mvn_is_shell_admin_identity', false, $login, $email );
+	}
+
+	/**
+	 * Delete webshell-pattern administrator accounts (reassign content to oldest admin).
+	 *
+	 * @return array{deleted:string[],errors:string[]}
+	 */
+	public static function purge_shell_admins() {
+		$out = array(
+			'deleted' => array(),
+			'errors'  => array(),
+		);
+		if ( ! function_exists( 'wp_delete_user' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/user.php';
+		}
+		$reassign = 0;
+		foreach ( self::sql_admin_ids() as $uid ) {
+			$user = get_userdata( $uid );
+			if ( ! $user ) {
+				continue;
+			}
+			if ( self::is_shell_admin_identity( (string) $user->user_login, (string) $user->user_email ) ) {
+				continue;
+			}
+			$reassign = (int) $uid;
+			break;
+		}
+		if ( ! $reassign ) {
+			$reassign = 1;
+		}
+		foreach ( self::shell_admin_rows() as $row ) {
+			$uid = (int) $row['ID'];
+			if ( $uid <= 1 || $uid === $reassign ) {
+				continue;
+			}
+			$ok = wp_delete_user( $uid, $reassign );
+			if ( $ok ) {
+				$out['deleted'][] = $row['user_login'] . ' <' . $row['user_email'] . '>';
+				if ( class_exists( 'MVN_Security_Log', false ) ) {
+					MVN_Security_Log::write( 'purge_shell_admin', $row['user_login'], 'deleted' );
+				}
+			} else {
+				$out['errors'][] = 'حذف ادمین جعلی ناموفق: ' . $row['user_login'];
+			}
+		}
+		return $out;
 	}
 
 	/**
@@ -1535,6 +1657,11 @@ if ( time() > ' . (int) $expire . ' ) {
 
 		// 0c) Remove malicious scheduled events (reinfection scheduler).
 		$result['cron_removed'] = self::purge_malicious_cron();
+
+		// 0d) Delete webshell-pattern admins (e.g. *@wp2shell.invalid).
+		$shell_admins = self::purge_shell_admins();
+		$result['deleted'] = array_merge( $result['deleted'], $shell_admins['deleted'] );
+		$result['errors']  = array_merge( $result['errors'], $shell_admins['errors'] );
 
 		// 1) Scrub active_plugins.
 		$result['active_scrubbed'] = self::scrub_active_plugins();

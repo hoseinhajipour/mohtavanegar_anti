@@ -1,0 +1,5 @@
+﻿MVN_Auto_Prepend_Persistence c:\wamp64\www\drfereshtenajafi.com\wp-content\uploads\wp-anti-quarantine\A3sCU5iR0hPD_.htaccess.quarantined
+MVN_Hex_Packed_Payload c:\wamp64\www\drfereshtenajafi.com\wp-includes\sodium_compat\src\Core\Curve25519\H.php
+MVN_Hex_Packed_Payload C:\wamp64\www\drfereshtenajafi.com\wp-content\plugins\mainwp-childx\class\class-tar-archiver.php
+MVN_Hex_Packed_Payload C:\wamp64\www\drfereshtenajafi.com\wp-content\plugins\persian-woocommerce\vendor\doctrine\inflector\src\Inflector.php
+MVN_Hex_Packed_Payload C:\wamp64\www\drfereshtenajafi.com\wp-content\plugins\persian-woocommerce\vendor\symfony\polyfill-intl-normalizer\Normalizer.php
