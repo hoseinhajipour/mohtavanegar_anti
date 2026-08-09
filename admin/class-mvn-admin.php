@@ -668,6 +668,12 @@ class MVN_Admin {
 		if ( ! empty( $result['safe_db'] ) ) {
 			$msg .= ' | db.php امن موقت نصب شد';
 		}
+		if ( class_exists( 'MVN_Path_Blocker' ) ) {
+			$pb = MVN_Path_Blocker::enforce();
+			if ( ! empty( $pb['removed'] ) || ! empty( $pb['blocked'] ) ) {
+				$msg .= ' | بلاکر cache/wpo-cache/db.php اعمال شد';
+			}
+		}
 		if ( ! empty( $result['safe_ac'] ) ) {
 			$msg .= ' | advanced-cache امن موقت نصب شد';
 		}
@@ -939,11 +945,17 @@ class MVN_Admin {
 		$saved = MVN_Hardening::instance()->save( $raw );
 		$sched = ! empty( $_POST['schedule_enabled'] );
 		MVN_Scheduler::set_enabled( $sched );
+		$path_block = ! empty( $_POST['path_blocker_enabled'] );
+		MVN_Path_Blocker::set_enabled( $path_block );
+		$block_status = $path_block ? MVN_Path_Blocker::enforce() : array();
 		wp_send_json_success(
 			array(
-				'message'    => 'تنظیمات ذخیره شد.' . ( $sched ? ' اسکن پس‌زمینه فعال شد.' : ' اسکن پس‌زمینه خاموش است.' ),
+				'message'    => 'تنظیمات ذخیره شد.'
+					. ( $sched ? ' اسکن پس‌زمینه فعال شد.' : ' اسکن پس‌زمینه خاموش است.' )
+					. ( $path_block ? ' بلاکر cache/db.php فعال است.' : ' بلاکر مسیرها خاموش شد.' ),
 				'settings'   => $saved,
 				'schedule'   => MVN_Scheduler::status(),
+				'path_block' => $block_status,
 				'http_guard' => MVN_Http_Guard::admin_payload(),
 			)
 		);

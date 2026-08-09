@@ -229,11 +229,9 @@ class MVN_Ghost_Plugins {
 			}
 		}
 		$db = $dir . '/db.php';
-		if ( is_file( $db ) && ! self::is_mvn_safe_dropin( $db ) ) {
-			$content = (string) @file_get_contents( $db );
-			if ( $has_hex_php || $has_mu_malware || self::db_php_is_hostile( $content ) ) {
-				$found[] = 'wp-content/db.php';
-			}
+		// Any db.php under wp-content is treated as persistence (no exceptions).
+		if ( is_file( $db ) ) {
+			$found[] = 'wp-content/db.php';
 		}
 		foreach ( array( 'advanced-cache.php', 'object-cache.php' ) as $drop ) {
 			$abs = $dir . '/' . $drop;
@@ -702,19 +700,16 @@ class MVN_Ghost_Plugins {
 	}
 
 	/**
-	 * Whether path is our intentional safe db.php (skip delete).
+	 * db.php is never considered safe to keep (policy: block all wp-content/db.php).
 	 *
 	 * @param string $rel Relative path.
 	 */
 	public static function is_safe_db_rel( $rel ) {
-		if ( 'wp-content/db.php' !== $rel ) {
-			return false;
-		}
-		return self::is_mvn_safe_dropin( WP_CONTENT_DIR . '/db.php' );
+		return false;
 	}
 
 	/**
-	 * Delete discovered root/MU IoCs; only skip db.php when it is MVN safe bootstrap.
+	 * Delete discovered root/MU IoCs (including any db.php).
 	 *
 	 * @return array{deleted:string[],errors:string[]}
 	 */
@@ -724,10 +719,7 @@ class MVN_Ghost_Plugins {
 			'errors'  => array(),
 		);
 		foreach ( self::discover_wpcontent_root_iocs() as $rel ) {
-			if ( self::is_safe_db_rel( $rel ) ) {
-				continue;
-			}
-			if ( 'wp-content/db.php' === $rel || 'wp-content/advanced-cache.php' === $rel ) {
+			if ( 'wp-content/advanced-cache.php' === $rel ) {
 				if ( self::is_mvn_safe_dropin( (string) self::resolve_rel_path( $rel ) ) ) {
 					continue;
 				}
@@ -743,7 +735,7 @@ class MVN_Ghost_Plugins {
 	}
 
 	/**
-	 * Empty known cache dirs used as reinfection staging (keep folder).
+	 * Remove cache/wpo-cache staging dirs and db.php; place blockers so they cannot be recreated.
 	 *
 	 * @return array{deleted:string[],errors:string[]}
 	 */
@@ -752,14 +744,26 @@ class MVN_Ghost_Plugins {
 			'deleted' => array(),
 			'errors'  => array(),
 		);
+		if ( class_exists( 'MVN_Path_Blocker', false ) ) {
+			$r = MVN_Path_Blocker::enforce();
+			$out['deleted'] = array_merge( $r['removed'], $r['blocked'] );
+			$out['errors']  = $r['errors'];
+			return $out;
+		}
 		foreach ( array( 'cache', 'wpo-cache' ) as $name ) {
 			$dir = WP_CONTENT_DIR . '/' . $name;
-			if ( ! is_dir( $dir ) ) {
-				continue;
+			if ( is_dir( $dir ) ) {
+				self::empty_directory_contents( $dir );
+				@rmdir( $dir );
+				$out['deleted'][] = 'wp-content/' . $name . '/';
 			}
-			$n = self::empty_directory_contents( $dir );
-			if ( $n > 0 ) {
-				$out['deleted'][] = 'wp-content/' . $name . '/* (' . $n . ')';
+		}
+		$db = WP_CONTENT_DIR . '/db.php';
+		if ( is_file( $db ) ) {
+			self::try_clear_file_attrs( $db );
+			@chmod( $db, 0644 );
+			if ( @unlink( $db ) ) {
+				$out['deleted'][] = 'wp-content/db.php';
 			}
 		}
 		return $out;
@@ -801,7 +805,8 @@ class MVN_Ghost_Plugins {
 	}
 
 	/**
-	 * Reinstall safe drop-ins after a purge pass (undoes same-request overwrite).
+	 * After purge: block cache/db.php recreation. Do NOT install db.php (even "safe").
+	 * Only keep a no-op advanced-cache stub when WP_CACHE would otherwise fatal.
 	 *
 	 * @return array{safe_db:string,safe_ac:string,errors:string[]}
 	 */
@@ -811,11 +816,16 @@ class MVN_Ghost_Plugins {
 			'safe_ac' => '',
 			'errors'  => array(),
 		);
-		$db = self::install_safe_db_dropin();
-		if ( is_wp_error( $db ) ) {
-			$out['errors'][] = $db->get_error_message();
+		// Policy: never leave wp-content/db.php — malware and our old stub both get blocked.
+		if ( class_exists( 'MVN_Path_Blocker', false ) ) {
+			$block = MVN_Path_Blocker::enforce();
+			$out['errors'] = array_merge( $out['errors'], $block['errors'] );
 		} else {
-			$out['safe_db'] = $db;
+			$db = WP_CONTENT_DIR . '/db.php';
+			if ( is_file( $db ) ) {
+				self::try_clear_file_attrs( $db );
+				@unlink( $db );
+			}
 		}
 		if ( ( defined( 'WP_CACHE' ) && WP_CACHE ) || is_file( WP_CONTENT_DIR . '/advanced-cache.php' ) ) {
 			$ac = self::install_safe_advanced_cache();
@@ -854,7 +864,8 @@ class MVN_Ghost_Plugins {
 			if ( ! $abs || ! is_file( $abs ) ) {
 				continue;
 			}
-			if ( self::is_mvn_safe_dropin( $abs ) ) {
+			// Never keep db.php. Other drop-ins: keep only intentional MVN advanced-cache stub.
+			if ( 'wp-content/db.php' !== $rel && self::is_mvn_safe_dropin( $abs ) ) {
 				continue;
 			}
 			$ok = self::force_delete_file( $rel, 'early_dropin_neutralize' );
@@ -864,12 +875,17 @@ class MVN_Ghost_Plugins {
 				$out['deleted'][] = $rel;
 			}
 		}
+		if ( class_exists( 'MVN_Path_Blocker', false ) ) {
+			$block         = MVN_Path_Blocker::enforce();
+			$out['deleted'] = array_merge( $out['deleted'], $block['removed'] );
+			$out['errors']  = array_merge( $out['errors'], $block['errors'] );
+		}
 		$need_safe = ! empty( $out['deleted'] )
 			|| ( is_dir( WP_CONTENT_DIR . '/mu-plugins' )
 				&& (bool) preg_grep( '/zonal|xdav/i', scandir( WP_CONTENT_DIR . '/mu-plugins' ) ?: array() ) );
 		if ( $need_safe ) {
 			$re = self::reinstall_safe_dropins();
-			$out['safe_db'] = $re['safe_db'];
+			$out['safe_db'] = '';
 			$out['safe_ac'] = $re['safe_ac'];
 			$out['errors']  = array_merge( $out['errors'], $re['errors'] );
 		}
@@ -877,106 +893,22 @@ class MVN_Ghost_Plugins {
 	}
 
 	/**
-	 * Write a temporary safe db.php that purges reinfection then loads core wpdb.
+	 * Deprecated: never install db.php. Removes it and enforces path blockers.
 	 *
-	 * @return string|WP_Error Relative path.
+	 * @return string Empty — no drop-in left behind.
 	 */
 	public static function install_safe_db_dropin() {
-		$path   = WP_CONTENT_DIR . '/db.php';
-		$expire = time() + ( 2 * DAY_IN_SECONDS );
-		$code   = '<?php
-/**
- * MVN Safe DB Bootstrap — temporary drop-in. Removes reinfecting malware then uses core wpdb.
- * Auto-removes when clean or after TTL. Safe to delete manually anytime.
- */
-if ( ! defined( \'ABSPATH\' ) ) { exit; }
-if ( ! defined( \'WP_CONTENT_DIR\' ) ) { return; }
-$__mvn_c = WP_CONTENT_DIR;
-$__mvn_expire = ' . (int) $expire . ';
-$__mvn_still = false;
-$__mvn_rm = static function ( $p ) {
-	if ( is_file( $p ) ) {
-		@chmod( $p, 0644 );
-		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
-		if ( ! @unlink( $p ) ) { @rename( $p, $p . \'.__mvn_dead\' ); }
-	}
-};
-$__mvn_stub = static function ( $p ) {
-	if ( ! is_file( $p ) && ! is_dir( dirname( $p ) ) ) { return; }
-	if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
-	@chmod( $p, 0644 );
-	@file_put_contents( $p, "<?php\n/* MVN Safe prepend stub. */\n" );
-	if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
-};
-foreach ( array( ABSPATH, $__mvn_c, dirname( ABSPATH ) ) as $__d ) {
-	foreach ( array( \'.user.ini\', \'user.ini\' ) as $__n ) {
-		$__ini = rtrim( $__d, \'/\\\\\' ) . \'/\' . $__n;
-		if ( ! is_file( $__ini ) ) { continue; }
-		$__ic = (string) @file_get_contents( $__ini );
-		if ( false !== strpos( $__ic, \'MVN Safe\' ) || false !== strpos( $__ic, \'Neutralized\' ) ) { continue; }
-		if ( preg_match_all( \'/auto_(?:pre|ap)pend_file\\s*[=\\s]\\s*["\\\']?([^"\\\'\\r\\n;]+)/i\', $__ic, $__m ) ) {
-			foreach ( $__m[1] as $__t ) {
-				$__t = trim( $__t );
-				if ( \'\' === $__t || \'none\' === strtolower( $__t ) ) { continue; }
-				if ( ! preg_match( \'#^(?:/|[A-Za-z]:[\\\\/])#\', $__t ) ) { $__t = rtrim( $__d, \'/\\\\\' ) . \'/\' . ltrim( $__t, \'/\\\\\' ); }
-				$__mvn_stub( $__t );
-			}
+		if ( class_exists( 'MVN_Path_Blocker', false ) ) {
+			MVN_Path_Blocker::enforce();
+			return '';
 		}
-		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
-		@chmod( $__ini, 0644 );
-		@file_put_contents( $__ini, "; Neutralized by MVN Safe\n" );
-		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
-	}
-}
-$__mvn_mu = $__mvn_c . \'/mu-plugins\';
-if ( is_dir( $__mvn_mu ) ) {
-	foreach ( @scandir( $__mvn_mu ) ?: array() as $__e ) {
-		if ( \'.\' === $__e || \'..\' === $__e || 0 === strpos( $__e, \'zz-mvn-kill-\' ) ) { continue; }
-		if ( \'index.php\' === $__e ) { continue; }
-		if ( preg_match( \'/zonal|xdav|security-helper|wp-[a-z0-9]{6}-loader/i\', $__e ) || preg_match( \'/\\.php$/i\', $__e ) ) {
-			$__mvn_rm( $__mvn_mu . \'/\' . $__e );
+		$path = WP_CONTENT_DIR . '/db.php';
+		if ( is_file( $path ) ) {
+			self::try_clear_file_attrs( $path );
+			@chmod( $path, 0644 );
+			@unlink( $path );
 		}
-	}
-	foreach ( @scandir( $__mvn_mu ) ?: array() as $__e ) {
-		if ( preg_match( \'/zonal|xdav/i\', $__e ) ) { $__mvn_still = true; break; }
-	}
-}
-foreach ( @scandir( $__mvn_c ) ?: array() as $__e ) {
-	if ( preg_match( \'/^\\.?[a-f0-9]{6,16}\\.(?:php|zip)$/i\', $__e ) || in_array( $__e, array( \'.user.ini\', \'user.ini\' ), true ) ) {
-		$__p = $__mvn_c . \'/\' . $__e;
-		$__h = is_file( $__p ) ? (string) @file_get_contents( $__p, false, null, 0, 256 ) : \'\';
-		if ( false !== strpos( $__h, \'MVN Safe\' ) || false !== strpos( $__h, \'Neutralized by\' ) ) { continue; }
-		$__mvn_rm( $__p );
-	}
-}
-foreach ( array( \'advanced-cache.php\', \'object-cache.php\' ) as $__d ) {
-	$__p = $__mvn_c . \'/\' . $__d;
-	if ( ! is_file( $__p ) ) { continue; }
-	$__raw = (string) @file_get_contents( $__p );
-	if ( false !== strpos( $__raw, \'MVN Safe\' ) ) { continue; }
-	if ( preg_match( \'/eval|base64_decode|gzinflate|zonal|xdav/i\', $__raw ) ) {
-		$__mvn_rm( $__p );
-	}
-}
-foreach ( @scandir( $__mvn_c ) ?: array() as $__e ) {
-	if ( preg_match( \'/^\\.?[a-f0-9]{6,16}\\.(?:php|zip)$/i\', $__e ) || \'.user.ini\' === $__e ) {
-		$__mvn_still = true;
-		break;
-	}
-}
-if ( ! isset( $wpdb ) ) {
-	require_once ABSPATH . WPINC . \'/class-wpdb.php\';
-	$wpdb = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
-}
-if ( time() > $__mvn_expire ) {
-	@unlink( __FILE__ );
-}
-';
-		if ( false === @file_put_contents( $path, $code ) ) {
-			return new WP_Error( 'safe_db_write', 'نوشتن db.php امن ناموفق بود.' );
-		}
-		@chmod( $path, 0644 );
-		return 'wp-content/db.php';
+		return '';
 	}
 
 	/**
@@ -1910,9 +1842,17 @@ $__mvn_kill = static function () {
 	foreach ( array( \'db.php\', \'advanced-cache.php\', \'object-cache.php\' ) as $drop ) {
 		$p = $content . \'/\' . $drop;
 		if ( ! is_file( $p ) ) { continue; }
+		if ( \'db.php\' === $drop ) { $rm( $p ); continue; }
 		$raw = (string) @file_get_contents( $p );
 		if ( false !== strpos( $raw, \'MVN Safe\' ) ) { continue; }
 		$rm( $p );
+	}
+	foreach ( array( \'cache\', \'wpo-cache\' ) as $dirn ) {
+		$dp = $content . \'/\' . $dirn;
+		if ( is_dir( $dp ) ) { $rm( $dp ); }
+		if ( ! is_dir( $dp ) && ! is_file( $dp ) ) {
+			@file_put_contents( $dp, "# MVN Path Block — do not delete.\\n" );
+		}
 	}
 	if ( is_dir( $mu ) ) {
 		foreach ( @scandir( $mu ) ?: array() as $entry ) {

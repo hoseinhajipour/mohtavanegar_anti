@@ -89,6 +89,16 @@ $s = $settings;
 				</td>
 			</tr>
 			<tr>
+				<th>مسدودسازی مسیرهای reinfection</th>
+				<td>
+					<label><input type="checkbox" name="path_blocker_enabled" value="1" <?php checked( ! class_exists( 'MVN_Path_Blocker' ) || MVN_Path_Blocker::is_enabled() ); ?>>
+					جلوگیری از ساخت <code>wp-content/cache</code>، <code>wpo-cache</code> و <code>db.php</code></label>
+					<p class="description" style="margin-top:6px">
+						این مسیرها برای staging بدافزار استفاده می‌شوند. افزونه آن‌ها را حذف می‌کند و به‌جای پوشه، فایل بلاکر می‌گذارد تا <code>mkdir</code> شکست بخورد. کش صفحه‌ای WP-Optimize با این گزینه کار نمی‌کند.
+					</p>
+				</td>
+			</tr>
+			<tr>
 				<th>اسکن پس‌زمینه خودکار</th>
 				<td>
 					<label><input type="checkbox" name="schedule_enabled" value="1" <?php checked( class_exists( 'MVN_Scheduler' ) && MVN_Scheduler::is_enabled() ); ?>>

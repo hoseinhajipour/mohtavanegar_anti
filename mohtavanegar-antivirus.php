@@ -3,7 +3,7 @@
  * Plugin Name:       Mohtavanegar Antivirus
  * Plugin URI:        https://mohtavanegar.local/
  * Description:       آنتی‌ویروس وردپرس: اسکن بدافزار، حذف کدهای تزریق‌شده، تعمیر فایل‌های هسته از سورس سالم، بازیابی htaccess، حذف htaccess های جعلی، سخت‌سازی امنیتی (Brute Force، XMLRPC، سطح دسترسی‌ها).
- * Version:           2.1.2
+ * Version:           2.1.3
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            Mohtavanegar Security
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MVN_VERSION', '2.1.2' );
+define( 'MVN_VERSION', '2.1.3' );
 define( 'MVN_PLUGIN_FILE', __FILE__ );
 define( 'MVN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MVN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -42,6 +42,7 @@ require_once MVN_PLUGIN_DIR . 'includes/class-mvn-scheduler.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-file-hash-store.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-incidents.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-reinfection-monitor.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-path-blocker.php';
 
 /**
  * Heavy scan/repair stack — load only in admin, AJAX, cron, or WP-CLI.
@@ -133,6 +134,7 @@ MVN_Http_Guard::instance()->boot();
 MVN_Perf::instance()->boot();
 MVN_Scheduler::boot();
 MVN_Reinfection_Monitor::boot();
+MVN_Path_Blocker::boot();
 
 $mvn_need_engine = is_admin()
 	|| wp_doing_ajax()
@@ -154,8 +156,12 @@ if ( $mvn_installed_ver !== MVN_VERSION ) {
 	// Stop legacy 15s scan workers that were slowing the site.
 	update_option( MVN_Scheduler::OPTION, 0, false );
 	MVN_Scheduler::deactivate();
+	if ( class_exists( 'MVN_Path_Blocker', false ) ) {
+		update_option( MVN_Path_Blocker::OPTION_ENABLED, 1, false );
+		MVN_Path_Blocker::enforce();
+	}
 	update_option( 'mvn_plugin_version', MVN_VERSION, false );
-	mvn_log( 'Upgraded to ' . MVN_VERSION . ' — background schedule disabled for performance.' );
+	mvn_log( 'Upgraded to ' . MVN_VERSION . ' — path blocker on; background schedule off.' );
 }
 
 if ( is_admin() ) {

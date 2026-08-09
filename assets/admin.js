@@ -1251,6 +1251,9 @@
       if (item.name === 'schedule_enabled') {
         payload.schedule_enabled = item.value;
       }
+      if (item.name === 'path_blocker_enabled') {
+        payload.path_blocker_enabled = item.value;
+      }
     });
     post('mvn_hardening_save', payload)
       .done(function (res) {
