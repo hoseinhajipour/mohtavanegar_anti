@@ -82,6 +82,9 @@ class MVN_Admin {
 			'mvn_perf_disarm',
 			'mvn_perf_optimize',
 			'mvn_perf_clear',
+			'mvn_remediation_preview',
+			'mvn_remediation_apply',
+			'mvn_persistence_selftest',
 		);
 	}
 
@@ -99,6 +102,9 @@ class MVN_Admin {
 		add_submenu_page( 'mvn-antivirus', 'داشبورد', 'داشبورد', $cap, 'mvn-antivirus', array( $this, 'page_dashboard' ) );
 		add_submenu_page( 'mvn-antivirus', 'اسکن', 'اسکن', $cap, 'mvn-scan', array( $this, 'page_scan' ) );
 		add_submenu_page( 'mvn-antivirus', 'رفع مشکلات (Fix)', 'رفع مشکلات', 'mvn_remediate', 'mvn-fix', array( $this, 'page_fix' ) );
+		add_submenu_page( 'mvn-antivirus', 'Persistence', 'Persistence', 'mvn_remediate', 'mvn-persistence', array( $this, 'page_persistence' ) );
+		add_submenu_page( 'mvn-antivirus', 'Incidents', 'Incidents', 'mvn_scan', 'mvn-incidents', array( $this, 'page_incidents' ) );
+		add_submenu_page( 'mvn-antivirus', 'Cron Monitor', 'Cron Monitor', 'mvn_scan', 'mvn-cron', array( $this, 'page_cron' ) );
 		add_submenu_page( 'mvn-antivirus', 'تعمیر هسته (Repair)', 'تعمیر هسته', 'mvn_remediate', 'mvn-repair', array( $this, 'page_repair' ) );
 		add_submenu_page( 'mvn-antivirus', 'سخت‌سازی', 'سخت‌سازی', 'mvn_configure', 'mvn-hardening', array( $this, 'page_hardening' ) );
 		add_submenu_page( 'mvn-antivirus', 'قرنطینه', 'قرنطینه', 'mvn_remediate', 'mvn-quarantine', array( $this, 'page_quarantine' ) );
@@ -931,10 +937,13 @@ class MVN_Admin {
 			$raw = array();
 		}
 		$saved = MVN_Hardening::instance()->save( $raw );
+		$sched = ! empty( $_POST['schedule_enabled'] );
+		MVN_Scheduler::set_enabled( $sched );
 		wp_send_json_success(
 			array(
-				'message'    => 'تنظیمات ذخیره شد.',
+				'message'    => 'تنظیمات ذخیره شد.' . ( $sched ? ' اسکن پس‌زمینه فعال شد.' : ' اسکن پس‌زمینه خاموش است.' ),
 				'settings'   => $saved,
+				'schedule'   => MVN_Scheduler::status(),
 				'http_guard' => MVN_Http_Guard::admin_payload(),
 			)
 		);
@@ -1088,5 +1097,68 @@ class MVN_Admin {
 		$this->guard();
 		MVN_Perf::clear_report();
 		wp_send_json_success( array( 'message' => 'گزارش پاک شد.' ) );
+	}
+
+	public function page_persistence() {
+		$issues   = MVN_Scanner::get_issues();
+		$findings = array_values(
+			array_filter(
+				(array) $issues,
+				static function ( $i ) {
+					$src = isset( $i['source'] ) ? $i['source'] : '';
+					$sig = isset( $i['sig'] ) ? $i['sig'] : '';
+					return in_array( $src, array( 'persistence', 'ghost' ), true )
+						|| in_array( $sig, array( 'persistence_source', 'persistence_cron', 'reinfection_detected', 'xdav_tracker_markers', 'known_malware_plugin' ), true );
+				}
+			)
+		);
+		$this->render(
+			'persistence',
+			array(
+				'findings' => $findings,
+				'watched'  => MVN_Reinfection_Monitor::watched(),
+			)
+		);
+	}
+
+	public function page_incidents() {
+		$this->render( 'incidents', array( 'incidents' => MVN_Incidents::all() ) );
+	}
+
+	public function page_cron() {
+		$this->render(
+			'cron',
+			array(
+				'cron' => MVN_Persistence_Scanner::cron_inventory(),
+				'logs' => MVN_Security_Log::recent( 50 ),
+			)
+		);
+	}
+
+	public function ajax_remediation_preview() {
+		$this->guard();
+		$id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+		$r  = MVN_Remediation::preview( $id );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success( $r );
+	}
+
+	public function ajax_remediation_apply() {
+		$this->guard();
+		$id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+		$r  = MVN_Remediation::apply( $id, false );
+		if ( is_wp_error( $r ) ) {
+			wp_send_json_error( array( 'message' => $r->get_error_message() ) );
+		}
+		wp_send_json_success( $r );
+	}
+
+	public function ajax_persistence_selftest() {
+		$this->guard();
+		require_once MVN_PLUGIN_DIR . 'tests/class-mvn-persistence-selftest.php';
+		$result = MVN_Persistence_Selftest::run();
+		wp_send_json_success( $result );
 	}
 }

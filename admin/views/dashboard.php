@@ -34,11 +34,14 @@ $data_outside = ! mvn_path_is_within( $data_dir, ABSPATH );
 	<ul class="mvn-kv">
 		<li><span>سن بسته امضا</span><b><?php echo esc_html( $sig_age ); ?></b></li>
 		<li><span>Self-integrity افزونه</span><b class="<?php echo ! empty( $self_integrity['ok'] ) ? 'mvn-ok' : 'mvn-bad'; ?>"><?php echo ! empty( $self_integrity['ok'] ) ? 'تأییدشده' : 'تغییر/کمبود فایل'; ?></b></li>
-		<li><span>زمان‌بندی</span><b class="<?php echo empty( $schedule['cron_disabled'] ) ? 'mvn-ok' : 'mvn-warn'; ?>"><?php echo empty( $schedule['cron_disabled'] ) ? 'فعال' : 'WP-Cron غیرفعال؛ system cron لازم است'; ?></b></li>
+		<li><span>اسکن پس‌زمینه</span><b class="<?php echo ! empty( $schedule['enabled'] ) ? 'mvn-warn' : 'mvn-ok'; ?>"><?php echo ! empty( $schedule['enabled'] ) ? 'روشن' : 'خاموش (سریع‌تر)'; ?></b></li>
+		<li><span>WP-Cron</span><b class="<?php echo empty( $schedule['cron_disabled'] ) ? 'mvn-ok' : 'mvn-warn'; ?>"><?php echo empty( $schedule['cron_disabled'] ) ? 'فعال' : 'غیرفعال؛ system cron لازم است'; ?></b></li>
 		<li><span>data-dir</span><b class="<?php echo $data_outside ? 'mvn-ok' : 'mvn-warn'; ?>"><?php echo $data_outside ? 'خارج webroot سایت' : 'fallback داخل webroot (payload رمزنگاری می‌شود)'; ?></b></li>
 		<li><span>رخدادهای باز/failed</span><b class="<?php echo $open_incidents ? 'mvn-bad' : 'mvn-ok'; ?>"><?php echo count( $open_incidents ); ?></b></li>
 		<li><span>آخرین پاک‌سازی verified</span><b><?php echo esc_html( ! empty( $last_verified['updated_at'] ) ? $last_verified['updated_at'] : '—' ); ?></b></li>
 		<li><span>Outbound anomaly</span><b><?php echo esc_html( ! empty( $audit_rows ) ? 'audit فعال' : 'موردی ثبت نشده' ); ?></b></li>
+		<li><span>مسیرهای Watched</span><b><?php echo (int) ( class_exists( 'MVN_Reinfection_Monitor' ) ? count( MVN_Reinfection_Monitor::watched() ) : 0 ); ?></b></li>
+		<li><span>Security log</span><b><a href="<?php echo esc_url( admin_url( 'admin.php?page=mvn-cron' ) ); ?>">Cron / Logs</a></b></li>
 	</ul>
 	<?php if ( ! empty( $schedule['cron_disabled'] ) ) : ?><code><?php echo esc_html( $schedule['system_cron'] ); ?></code><?php endif; ?>
 </div>

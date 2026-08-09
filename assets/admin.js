@@ -1248,6 +1248,9 @@
       if (m) {
         payload.settings[m[1]] = item.value;
       }
+      if (item.name === 'schedule_enabled') {
+        payload.schedule_enabled = item.value;
+      }
     });
     post('mvn_hardening_save', payload)
       .done(function (res) {
@@ -1670,5 +1673,48 @@
         $btn.prop('disabled', false);
         notice($('#mvn-rollback-result'), 'خطای ارتباط', false);
       });
+  });
+
+  /* ---- Persistence dry-run / remediate ---- */
+  $(document).on('click', '.mvn-dry-run', function () {
+    var id = $(this).data('id');
+    var $out = $('#mvn-dry-run-out').show().text('در حال Dry Run...');
+    post('mvn_remediation_preview', { id: id }).done(function (res) {
+      if (res && res.success && res.data && res.data.lines) {
+        $out.text(res.data.lines.join('\n'));
+      } else {
+        $out.text((res && res.data && res.data.message) || MVN.i18n.error);
+      }
+    });
+  });
+
+  $(document).on('click', '.mvn-remediate', function () {
+    var id = $(this).data('id');
+    if (!window.confirm('پس از Dry Run: ابتدا Persistence سپس بدافزار قرنطینه شود؟')) return;
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_remediation_apply', { id: id }).done(function (res) {
+      $btn.prop('disabled', false);
+      if (res && res.success) {
+        alert('رفع انجام شد. مسیر تحت نظر Reinfection Monitor قرار گرفت.');
+        location.reload();
+      } else {
+        alert((res && res.data && res.data.message) || MVN.i18n.error);
+      }
+    });
+  });
+
+  $('#mvn-persistence-selftest').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_persistence_selftest', {}).done(function (res) {
+      $btn.prop('disabled', false);
+      if (res && res.success && res.data) {
+        var lines = (res.data.results || []).map(function (r) {
+          return (r.ok ? 'PASS' : 'FAIL') + ' #' + r.id + ' ' + r.name + ' — ' + (r.detail || '');
+        });
+        alert((res.data.ok ? 'Self-test OK\n' : 'Self-test FAILED\n') + lines.join('\n'));
+      } else {
+        alert((res && res.data && res.data.message) || MVN.i18n.error);
+      }
+    });
   });
 })(jQuery);

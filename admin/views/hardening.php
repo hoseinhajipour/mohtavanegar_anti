@@ -89,6 +89,16 @@ $s = $settings;
 				</td>
 			</tr>
 			<tr>
+				<th>اسکن پس‌زمینه خودکار</th>
+				<td>
+					<label><input type="checkbox" name="schedule_enabled" value="1" <?php checked( class_exists( 'MVN_Scheduler' ) && MVN_Scheduler::is_enabled() ); ?>>
+					اجرای اسکن روزانه/هفتگی در پس‌زمینه (WP-Cron)</label>
+					<p class="description" style="margin-top:6px">
+						پیش‌فرض <strong>خاموش</strong> است تا سایت کند نشود. فقط وقتی سیستم cron سرور دارید روشن کنید؛ اسکن دستی از صفحه «اسکن» همیشه در دسترس است.
+					</p>
+				</td>
+			</tr>
+			<tr>
 				<th>غیرفعال‌سازی WP-Cron</th>
 				<td>
 					<label><input type="checkbox" name="settings[disable_wp_cron]" value="1" <?php checked( ! empty( $s['disable_wp_cron'] ) ); ?>>

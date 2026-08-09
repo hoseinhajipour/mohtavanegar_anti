@@ -31,6 +31,7 @@ class MVN_Cleaner {
 				'db_delete_option',
 				'delete_htaccess',
 				'as_delete',
+				'persist_delete_option',
 			)
 		);
 	}
@@ -48,6 +49,7 @@ class MVN_Cleaner {
 				'db_review',
 				'core_repair',
 				'manual_review',
+				'persist_disable_cron',
 			)
 		);
 	}
@@ -552,11 +554,24 @@ class MVN_Cleaner {
 			return new WP_Error( 'confidence_too_low', 'confidence کمتر از 65 است؛ طبق سیاست فقط گزارش/ignore مجاز است.' );
 		}
 
-		if ( 'db' === $source || 0 === strpos( $rel, 'db:' ) ) {
+		if ( 'db' === $source || 0 === strpos( $rel, 'db:' ) || 'persist_delete_option' === $action ) {
 			return self::apply_db( $issue );
 		}
 		if ( 'as' === $source || 0 === strpos( $rel, 'as:' ) || 'as_delete' === $action ) {
 			return self::apply_as( $issue );
+		}
+		if ( 'persist_disable_cron' === $action ) {
+			$hook = ! empty( $issue['cron_hook'] ) ? (string) $issue['cron_hook'] : preg_replace( '/^cron:/', '', $rel );
+			$hook = sanitize_text_field( $hook );
+			if ( ! $hook ) {
+				return new WP_Error( 'bad_hook', 'hook کرون نامعتبر' );
+			}
+			MVN_Quarantine::store_text( 'cron:' . $hook, wp_json_encode( array( 'hook' => $hook ) ), array( 'reason' => 'cron-disable' ) );
+			wp_unschedule_hook( $hook );
+			if ( class_exists( 'MVN_Security_Log' ) ) {
+				MVN_Security_Log::write( 'cron_removed', $hook, 'ok' );
+			}
+			return true;
 		}
 
 		if ( 'repo_repair' === $action || 'manual_review' === $action ) {
@@ -619,6 +634,9 @@ class MVN_Cleaner {
 				if ( is_wp_error( $result ) ) {
 					return $result;
 				}
+				if ( class_exists( 'MVN_Reinfection_Monitor' ) ) {
+					MVN_Reinfection_Monitor::watch( $rel, isset( $issue['id'] ) ? $issue['id'] : '' );
+				}
 				return true;
 
 			case 'clean':
@@ -641,7 +659,7 @@ class MVN_Cleaner {
 			return true;
 		}
 		if ( 'hidden_iframe' === $sig ) {
-			if ( preg_match( '/litespeedHiddenIframe|class=["\']blockUI|jquery\.blockUI|blockUI/i', $blob ) ) {
+			if ( preg_match( '/litespeedHiddenIframe|class=["\']blockUI|jquery\.blockUI|blockUI|wp-embedded-content|wp-embed/i', $blob ) ) {
 				return true;
 			}
 			if ( false !== strpos( $rel, 'litespeed-cache/' ) || false !== strpos( $rel, 'wp-optimize/' ) ) {
@@ -649,6 +667,12 @@ class MVN_Cleaner {
 			}
 		}
 		if ( 'variable_variables_eval' === $sig && preg_match( '/\$sanitize_func\s*\(|sanitize_(?:text|textarea|email|title|key|file_name|hex_color)/i', $blob ) ) {
+			return true;
+		}
+		if ( 'nested_decoders' === $sig && preg_match( '#wp-content/plugins/(?:revslider|js_composer)/#', $rel ) ) {
+			return true;
+		}
+		if ( 'db_spam_injection' === $sig && preg_match( '/wp-embedded-content|data-secret=/i', $blob ) ) {
 			return true;
 		}
 		return false;
@@ -780,6 +804,7 @@ class MVN_Cleaner {
 				return self::db_clean( $issue );
 
 			case 'db_delete_option':
+			case 'persist_delete_option':
 				return self::db_delete_option( $issue );
 
 			case 'db_review':

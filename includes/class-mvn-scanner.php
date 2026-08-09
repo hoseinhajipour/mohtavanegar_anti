@@ -265,6 +265,17 @@ class MVN_Scanner {
 			MVN_AS_Scanner::tick( $state );
 			$state['updated_at'] = gmdate( 'c' );
 			if ( MVN_AS_Scanner::is_done( $state ) ) {
+				self::after_as_phase( $state );
+			} else {
+				self::commit_tick_state( $state );
+			}
+			return $state;
+		}
+
+		if ( 'persistence' === $phase ) {
+			MVN_Persistence_Scanner::tick( $state );
+			$state['updated_at'] = gmdate( 'c' );
+			if ( MVN_Persistence_Scanner::is_done( $state ) ) {
 				self::finish_scan( $state );
 			} else {
 				self::commit_tick_state( $state );
@@ -375,13 +386,25 @@ class MVN_Scanner {
 		if ( ! empty( $state['scan_as'] ) ) {
 			MVN_AS_Scanner::begin_phase( $state );
 			if ( MVN_AS_Scanner::is_done( $state ) ) {
-				self::finish_scan( $state );
+				self::after_as_phase( $state );
 			} else {
 				mvn_state_write( self::STATE_KEY, $state );
 			}
 			return;
 		}
-		self::finish_scan( $state );
+		self::after_as_phase( $state );
+	}
+
+	/**
+	 * AS phase finished — persistence / reinfection correlation, then finalize.
+	 */
+	private static function after_as_phase( &$state ) {
+		MVN_Persistence_Scanner::begin_phase( $state );
+		if ( MVN_Persistence_Scanner::is_done( $state ) ) {
+			self::finish_scan( $state );
+		} else {
+			mvn_state_write( self::STATE_KEY, $state );
+		}
 	}
 
 	private static function should_scan_core( $state ) {
@@ -1010,6 +1033,18 @@ class MVN_Scanner {
 			case 'webshell_markers':
 				// Security plugins embed attack names inside WAF rule patterns.
 				if ( preg_match( '/wfWAFRule|Wordfence|#\\^/i', substr( $content, max( 0, $offset - 120 ), 240 ) ) ) {
+					return true;
+				}
+				break;
+
+			case 'nested_decoders':
+				// Slider/export codecs: gzuncompress(base64_decode($data)) without eval — RevSlider etc.
+				$ctx = substr( $content, max( 0, $offset - 80 ), strlen( (string) $match ) + 200 );
+				if ( preg_match( '/gz(?:en|de|uncompress)|json_decode|RevSlider|NOSONAR/i', $ctx )
+					&& ! preg_match( '/\b(?:eval|assert|create_function)\s*\(/i', $ctx ) ) {
+					return true;
+				}
+				if ( preg_match( '#wp-content/plugins/(?:revslider|js_composer|essential-grid)/#', $rel ) ) {
 					return true;
 				}
 				break;

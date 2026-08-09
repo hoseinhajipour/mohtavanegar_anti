@@ -108,6 +108,27 @@ function mvn_db_protected_options() {
 			'secure_auth_salt',
 			'logged_in_salt',
 			'nonce_salt',
+			// Core options that look "wp_*" but are legitimate (seen as FPs on live sites).
+			'wp_page_for_privacy_policy',
+			'wp_attachment_pages_enabled',
+			'wp_calendar_block_has_published_posts',
+			'wp_force_deactivated_plugins',
+			'wp_notes_notify',
+			'WPLANG',
+			'stylesheet_root',
+			'template_root',
+			'theme_switched',
+			'sidebars_widgets',
+			'widget_block',
+			'can_compress_scripts',
+			'finished_splitting_shared_terms',
+			'recently_activated',
+			'uninstall_plugins',
+			'auto_update_core_major',
+			'auto_update_core_minor',
+			'auto_update_core_dev',
+			'auto_plugin_theme_update_emails',
+			'wp_plugin_dependencies',
 		)
 	);
 }
@@ -241,13 +262,19 @@ function mvn_db_heuristic_rogue_option_name( $table, $row, $column, $content ) {
 	if ( in_array( $name, mvn_db_protected_options(), true ) ) {
 		return false;
 	}
-	if ( preg_match( '/^(?:wp[0-9]?_|class-wp-|wp_cache_|_wp_)/i', $name ) ) {
-		return 'نام option شبیه هسته وردپرس اما غیراستاندارد';
+	if ( mvn_db_is_benign_option( $name ) ) {
+		return false;
 	}
+	// Pure md5-like option names (common malware stash).
 	if ( preg_match( '/^[a-f0-9]{32}$/i', $name ) ) {
 		return 'نام option تصادفی (md5-like) — الگوی رایج بدافزار';
 	}
-	if ( preg_match( '/(?:shell|backdoor|eval|base64|hack|malware|c99|r57|xdav|tracker)/i', $name ) ) {
+	// Fake core-looking names: wp_ + random hex / class-wp- obfuscation — NOT all wp_* (core uses many).
+	if ( preg_match( '/^(?:wp[0-9]?_[a-f0-9]{8,}|class-wp-[a-f0-9]{6,}|wp_cache_[a-f0-9]{8,})$/i', $name ) ) {
+		return 'نام option شبیه هسته وردپرس اما غیراستاندارد';
+	}
+	// Keyword hits — skip short legitimate substrings already covered by protected list.
+	if ( preg_match( '/(?:shell|backdoor|c99|r57|xdav[-_]?tracker|webshell|hack_file|^hack_)/i', $name ) ) {
 		return 'نام option حاوی کلمات مشکوک';
 	}
 	return false;
@@ -363,7 +390,9 @@ function mvn_db_heuristic_spam_injection( $table, $row, $column, $content ) {
 	if ( preg_match( '/<script[^>]+src\s*=\s*["\']https?:\/\/(?!' . preg_quote( parse_url( home_url(), PHP_URL_HOST ), '/' ) . ')/i', $content ) ) {
 		return 'اسکریپت خارجی در محتوا';
 	}
-	if ( preg_match( '/<iframe[^>]+src\s*=\s*["\']https?:\/\//i', $content ) && ! preg_match( '/youtube\.com|vimeo\.com|google\.com\/maps/i', $content ) ) {
+	// WordPress oEmbed uses class="wp-embedded-content" iframes — not spam.
+	if ( preg_match( '/<iframe[^>]+src\s*=\s*["\']https?:\/\//i', $content )
+		&& ! preg_match( '/youtube\.com|vimeo\.com|google\.com\/maps|wp-embedded-content|data-secret=/i', $content ) ) {
 		return 'iframe خارجی مشکوک';
 	}
 	if ( preg_match( '/\b(?:viagra|cialis|casino|porn|xxx|payday)\b/i', $content ) ) {
@@ -380,10 +409,13 @@ function mvn_db_heuristic_serialized_shell( $table, $row, $column, $content ) {
 		return false;
 	}
 
-	// WordPress update / cache transients routinely store stdClass — not malware.
+	// WordPress update / cache transients + common plugin option blobs — not malware.
 	if ( 'options' === $table && ! empty( $row['option_name'] ) ) {
 		$name = (string) $row['option_name'];
 		if ( 0 === strpos( $name, '_transient_' ) || 0 === strpos( $name, '_site_transient_' ) ) {
+			return false;
+		}
+		if ( preg_match( '/^(?:revslider|elementor|woocommerce|rank_math|litespeed|wpo_|fs_|wpseo)/i', $name ) ) {
 			return false;
 		}
 	}

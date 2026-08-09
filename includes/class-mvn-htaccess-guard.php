@@ -97,10 +97,18 @@ class MVN_Htaccess_Guard {
 			}
 			$content = (string) @file_get_contents( $abs );
 
+			// Legitimate plugin security .htaccess (Wordfence, RevSlider, deny-all) must not be purged.
+			if ( self::is_benign_plugin_htaccess( $rel, $content ) ) {
+				$skipped++;
+				continue;
+			}
+
 			$is_rogue = false;
-			if ( preg_match( '/php_value|php_flag|auto_prepend_file|auto_append_file|SetHandler|AddHandler/i', $content ) ) {
+			if ( preg_match( '/php_value|php_flag|auto_prepend_file|auto_append_file|SetHandler\s+application\/x-httpd-php|AddHandler\s+application\/x-httpd-php/i', $content ) ) {
 				$is_rogue = true;
-			} elseif ( preg_match( '/RewriteEngine\s+On/i', $content ) && preg_match( '/RewriteRule/i', $content ) ) {
+			} elseif ( preg_match( '/RewriteEngine\s+On/i', $content ) && preg_match( '/RewriteRule/i', $content )
+				&& preg_match( '/(?:base64|eval|auto_prepend|php:\/\/|\.php\?[a-z]=|passthru)/i', $content ) ) {
+				// Rewrite alone is common in WAF plugins — only rogue when payload-like.
 				$is_rogue = true;
 			} elseif ( $aggressive ) {
 				// Keep pure "deny PHP" uploads htaccess.
@@ -219,5 +227,33 @@ class MVN_Htaccess_Guard {
 			);
 		}
 		return $out;
+	}
+
+	/**
+	 * Plugin/theme .htaccess that only denies access or runs WAF rules — not malware.
+	 *
+	 * @param string $rel     Relative path.
+	 * @param string $content File contents.
+	 * @return bool
+	 */
+	public static function is_benign_plugin_htaccess( $rel, $content ) {
+		$rel = str_replace( '\\', '/', (string) $rel );
+		if ( ! preg_match( '#^wp-content/(?:plugins|themes)/#', $rel ) ) {
+			return false;
+		}
+		// Malware markers always win.
+		if ( preg_match( '/auto_prepend_file|auto_append_file|php_value\s+auto_|SetHandler\s+application\/x-httpd-php/i', $content ) ) {
+			return false;
+		}
+		// Pure deny / FilesMatch deny PHP — security hardening by the plugin itself.
+		if ( preg_match( '/Require all denied|Deny from all|RewriteRule\s+\.\*\s+-\s+\[F/i', $content )
+			&& ! preg_match( '/(?:eval|base64_decode|passthru|shell_exec)\s*\(/i', $content ) ) {
+			return true;
+		}
+		// Known security / slider plugins that ship Rewrite rules.
+		if ( preg_match( '#wp-content/plugins/(?:wordfence|revslider|wp-optimize|litespeed-cache|the-paste)/#', $rel ) ) {
+			return true;
+		}
+		return false;
 	}
 }

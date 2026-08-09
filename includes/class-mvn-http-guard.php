@@ -373,10 +373,20 @@ class MVN_Http_Guard {
 		if ( $this->logging ) {
 			return;
 		}
+		// Front-end: do not write options on every outbound call (major slowdown).
+		if ( ! is_admin() && ! ( defined( 'DOING_CRON' ) && DOING_CRON ) && ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return;
+		}
 		$host = strtolower( (string) $host );
 		if ( ! $host ) {
 			return;
 		}
+		// Debounce same-host writes (max once per 45s).
+		$debounce_key = 'mvn_http_log_' . md5( $host );
+		if ( get_transient( $debounce_key ) ) {
+			return;
+		}
+		set_transient( $debounce_key, 1, 45 );
 
 		$this->logging = true;
 		$log = get_option( self::OPTION_LOG, array() );

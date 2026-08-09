@@ -15,13 +15,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 		<nav class="mvn-tabs">
 			<?php
 			$tabs = array(
-				'mvn-antivirus'  => 'داشبورد',
-				'mvn-scan'       => 'اسکن',
-				'mvn-fix'        => 'رفع مشکلات',
-				'mvn-repair'     => 'تعمیر هسته',
-				'mvn-hardening'  => 'سخت‌سازی',
-				'mvn-quarantine' => 'قرنطینه',
-				'mvn-perf'       => 'سرعت لود',
+				'mvn-antivirus'    => 'داشبورد',
+				'mvn-scan'         => 'اسکن',
+				'mvn-fix'          => 'رفع مشکلات',
+				'mvn-persistence'  => 'Persistence',
+				'mvn-incidents'    => 'Incidents',
+				'mvn-cron'         => 'Cron',
+				'mvn-repair'       => 'تعمیر هسته',
+				'mvn-hardening'    => 'سخت‌سازی',
+				'mvn-quarantine'   => 'قرنطینه',
+				'mvn-perf'         => 'سرعت لود',
 			);
 			$current = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : 'mvn-antivirus'; // phpcs:ignore
 			foreach ( $tabs as $slug => $label ) :
