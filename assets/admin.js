@@ -1185,6 +1185,34 @@
       });
   });
 
+  $('#mvn-ghost-purge').on('click', function () {
+    if (
+      !window.confirm(
+        'پوشه/فایل‌های بدافزار + .user.ini + PHPهای hex در wp-content حذف شوند؟ (اگر قفل باشند rename می‌شوند)'
+      )
+    ) {
+      return;
+    }
+    var $btn = $(this);
+    $btn.prop('disabled', true);
+    post('mvn_ghost_purge')
+      .done(function (res) {
+        if (res && res.success) {
+          notice($('#mvn-ghost-purge-result'), res.data.message, !(res.data.result && res.data.result.errors && res.data.result.errors.length));
+          if (res.data.status) {
+            window.setTimeout(function () {
+              window.location.reload();
+            }, 1200);
+          }
+        } else {
+          notice($('#mvn-ghost-purge-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
+        }
+      })
+      .always(function () {
+        $btn.prop('disabled', false);
+      });
+  });
+
   /* ---------- Hardening ---------- */
   $('#mvn-hardening-form').on('submit', function (e) {
     e.preventDefault();

@@ -256,6 +256,48 @@ function mvn_builtin_signatures() {
 			'scope'    => 'htaccess',
 			'clean'    => 'none',
 		),
+
+		// ---------- xdav-tracker / stealth backdoor family ----------
+		array(
+			'id'       => 'xdav_tracker_markers',
+			'label'    => 'نشانه‌های خانواده xdav-tracker / Fake Cloudflare',
+			'severity' => 'critical',
+			'pattern'  => '/(?:xdav[-_]?tracker|Plugin\s+Name\s*:\s*[^\n]*xdav|wp-security-helper|Fake\s+Cloudflare|cloudflare[-_]?verif)/i',
+			'scope'    => 'php',
+			'clean'    => 'none',
+		),
+		array(
+			'id'       => 'zonal_runner_tap_markers',
+			'label'    => 'نشانه‌های Zonal Runner Tap / پلاگین جعلی مشابه',
+			'severity' => 'critical',
+			'pattern'  => '/(?:Zonal\s*Runner\s*Tap|zonal[-_]?runner[-_]?tap|Plugin\s+Name\s*:\s*[^\n]*Zonal\s*Runner)/i',
+			'scope'    => 'php',
+			'clean'    => 'none',
+		),
+		array(
+			'id'       => 'shutdown_js_inject',
+			'label'    => 'register_shutdown_function + تزریق JS مبهم (base64/XOR)',
+			'severity' => 'critical',
+			'pattern'  => '/register_shutdown_function\s*\([\s\S]{0,2500}?(?:base64_decode|gzinflate|str_rot13|\\\\x[0-9a-f]{2})[\s\S]{0,1200}?(?:<script|echo\s+|print\s+|ob_get|\$_SERVER\s*\[\s*[\'"]REQUEST)/i',
+			'scope'    => 'php',
+			'clean'    => 'none',
+		),
+		array(
+			'id'       => 'hide_plugin_user_hooks',
+			'label'    => 'قلاب مخفی‌سازی پلاگین/ادمین (all_plugins + pre_user_query)',
+			'severity' => 'critical',
+			'pattern'  => '/add_(?:filter|action)\s*\(\s*[\'"]all_plugins[\'"][\s\S]{0,800}?add_(?:filter|action)\s*\(\s*[\'"](?:pre_user_query|views_users|user_row_actions)[\'"]/i',
+			'scope'    => 'php',
+			'clean'    => 'none',
+		),
+		array(
+			'id'       => 'stealth_admin_recreate',
+			'label'    => 'بازسازی خودکار ادمین مخفی (wp_insert_user + hide)',
+			'severity' => 'critical',
+			'pattern'  => '/wp_insert_user\s*\([\s\S]{0,600}?(?:administrator|role[\'"]\s*=>)[\s\S]{0,800}?(?:pre_user_query|all_plugins|_pre_user_id)/i',
+			'scope'    => 'php',
+			'clean'    => 'none',
+		),
 	);
 }
 

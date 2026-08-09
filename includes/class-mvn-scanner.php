@@ -154,6 +154,7 @@ class MVN_Scanner {
 				'core'     => 0,
 				'repo'     => 0,
 				'dropin'   => 0,
+				'ghost'    => 0,
 				'polyglot' => 0,
 				'hash'     => 0,
 			),
@@ -161,6 +162,8 @@ class MVN_Scanner {
 		mvn_state_write( self::STATE_KEY, $state );
 		// Structural drop-in audit once at start.
 		MVN_Dropin_Audit::audit( $state );
+		// Known malware plugins + ghosts hidden via all_plugins / admin filters.
+		MVN_Ghost_Plugins::audit( $state );
 		mvn_state_write( self::STATE_KEY, $state );
 		update_option( MVN_OPTION_LASTSCAN, array( 'id' => $state['id'], 'started_at' => $state['started_at'] ), false );
 		mvn_log( 'Scan started: ' . $state['id'] . ' catalog=' . count( $filtered ) . ' to_scan=' . $state['total'] . ' skipped=' . $skipped_unchanged );
@@ -491,6 +494,33 @@ class MVN_Scanner {
 
 		$name = basename( $rel );
 		$ext  = strtolower( pathinfo( $rel, PATHINFO_EXTENSION ) );
+
+		// Path IoC: xdav-tracker / companion malware plugin files.
+		$ioc = MVN_Ghost_Plugins::path_ioc_match( $rel );
+		if ( $ioc ) {
+			if ( self::add_finding(
+				$state,
+				array(
+					'rel'      => $rel,
+					'sig'      => 'known_malware_plugin',
+					'label'    => 'فایل بدافزار شناخته‌شده (IoC مسیر): ' . $ioc,
+					'severity' => 'critical',
+					'detail'   => 'نام/مسیر مطابق خانواده xdav-tracker یا پلاگین همراه است.',
+					'action'   => 'quarantine_delete',
+					'snippet'  => self::snippet( $content, 0, 160 ),
+					'source'   => 'ghost',
+				),
+				$content,
+				$file_hash
+			) ) {
+				$had_issues = true;
+				$state['stats']['critical']++;
+				if ( ! isset( $state['stats']['ghost'] ) ) {
+					$state['stats']['ghost'] = 0;
+				}
+				$state['stats']['ghost']++;
+			}
+		}
 		$is_htaccess = ( '.htaccess' === $name || 'htaccess' === $name );
 		$is_ini      = ( '.user.ini' === $name || 'user.ini' === $name || 'php.ini' === $name || 'ini' === $ext );
 		$is_php      = in_array( $ext, array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'inc' ), true );
@@ -638,6 +668,9 @@ class MVN_Scanner {
 				$action = 'none' === $sig['clean'] ? 'quarantine' : 'clean';
 				if ( $is_htaccess && 'none' === $sig['clean'] ) {
 					$action = 'delete_htaccess';
+				}
+				if ( in_array( $sig['id'], array( 'xdav_tracker_markers', 'zonal_runner_tap_markers', 'shutdown_js_inject', 'hide_plugin_user_hooks', 'stealth_admin_recreate' ), true ) ) {
+					$action = 'quarantine_delete';
 				}
 				if ( ! self::add_finding(
 					$state,

@@ -42,6 +42,7 @@ class MVN_Admin {
 			'mvn_htaccess_restore',
 			'mvn_htaccess_purge',
 			'mvn_uploads_harden',
+			'mvn_ghost_purge',
 			'mvn_core_start',
 			'mvn_core_tick',
 			'mvn_core_download',
@@ -266,6 +267,7 @@ class MVN_Admin {
 				'themes'     => MVN_Theme_Repair::catalog_status(),
 				'plstate'    => MVN_Plugin_Repair::get_state(),
 				'thstate'    => MVN_Theme_Repair::get_state(),
+				'ghost'      => MVN_Ghost_Plugins::status(),
 			)
 		);
 	}
@@ -561,6 +563,36 @@ class MVN_Admin {
 			array(
 				'message' => $msg,
 				'status'  => MVN_Htaccess_Guard::uploads_status(),
+			)
+		);
+	}
+
+	public function ajax_ghost_purge() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$result = MVN_Ghost_Plugins::purge_known();
+		$msg = sprintf(
+			'حذف/جابه‌جایی: %d | rename: %d | option: %d | usermeta: %d | scrub: %d',
+			count( $result['deleted'] ),
+			isset( $result['renamed'] ) ? count( $result['renamed'] ) : 0,
+			count( $result['options'] ),
+			isset( $result['usermeta'] ) ? count( $result['usermeta'] ) : 0,
+			(int) $result['active_scrubbed']
+		);
+		if ( ! empty( $result['safe_db'] ) ) {
+			$msg .= ' | db.php امن موقت نصب شد (قبل از MU اجرا می‌شود)';
+		}
+		if ( ! empty( $result['kill_mu'] ) ) {
+			$msg .= ' | MU-killer نصب شد — یک‌بار صفحه را رفرش کنید';
+		}
+		if ( ! empty( $result['errors'] ) ) {
+			$msg .= ' | خطا: ' . implode( '؛ ', $result['errors'] );
+		}
+		wp_send_json_success(
+			array(
+				'message' => $msg,
+				'result'  => $result,
+				'status'  => MVN_Ghost_Plugins::status(),
 			)
 		);
 	}

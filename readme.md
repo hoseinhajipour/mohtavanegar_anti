@@ -9,6 +9,7 @@
 - تشخیص کدهای تزریق‌شده (eval/base64، webshell، iframe مخفی، JS مبهم و ...)
 - تشخیص ویروس جدید: ساخت `.htaccess` جعلی در تک‌تک پوشه‌ها
 - تشخیص PHP داخل پوشه `uploads`
+- تشخیص خانواده `xdav-tracker` / پلاگین‌های مخفی و ادمین ghost
 
 ### ۲) رفع (Fix)
 - پاک کردن تکه کد تزریق‌شده از فایل‌های سالم (بدون حذف کل فایل)
@@ -18,6 +19,7 @@
 ### ۳) تعمیر (Repair)
 - جایگزینی فایل‌های هسته از `sources/wordpress_core.zip`
 - بازیابی `.htaccess` ریشه از `sources/default.htaccess`
+- **پاک‌سازی پایدار xdav-tracker** (حذف IoC + scrub option/active_plugins)
 - **جایگزینی پلاگین‌های مخزن وردپرس** (Elementor، Classic Editor، LiteSpeed Cache و ...) از wordpress.org
 - اصلاح سطح دسترسی‌ها (755/644/600)
 
@@ -40,12 +42,13 @@
 
 ## ترتیب پیشنهادی بعد از آلودگی
 
-1. اسکن کامل
-2. رفع مشکلات (حذف injection + htaccess جعلی)
-3. تعمیر هسته از zip
-4. بازیابی htaccess ریشه
-5. اصلاح Permissions
-6. فعال‌سازی سخت‌سازی
+1. در Repair → حذف فوری IoCهای xdav / security-helper (قبل از تکیه به داشبورد وردپرس)
+2. اسکن کامل (فایل + DB + پلاگین مخفی)
+3. رفع مشکلات (حذف injection + htaccess جعلی + قرنطینه)
+4. حذف ادمین ghost از دیتابیس (بعد از حذف کد مخفی‌کننده)
+5. تعمیر هسته از zip + deny-PHP روی uploads
+6. بازیابی htaccess ریشه + اصلاح Permissions
+7. فعال‌سازی سخت‌سازی + عوض کردن همه پسوردها/FTP و saltهای wp-config
 
 ## نکات
 

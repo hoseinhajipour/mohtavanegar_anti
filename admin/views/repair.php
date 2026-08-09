@@ -3,6 +3,82 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 ?>
+<?php
+$ghost = isset( $ghost ) && is_array( $ghost ) ? $ghost : array(
+	'ioc_paths'          => array(),
+	'persistence'        => array(),
+	'hidden_plugins'     => array(),
+	'ghost_admins'       => 0,
+	'ghost_admin_sample' => array(),
+	'tracker_options'    => array(),
+	'sql_admins'         => 0,
+	'visible_admins'     => 0,
+);
+?>
+<div class="mvn-card" style="margin-bottom:16px">
+	<h2>پاک‌سازی پایدار: xdav-tracker / Zonal Runner Tap</h2>
+	<p>
+		این‌ها پلاگین‌های جعلی با نام بازاریابی ساختگی‌اند. معمولاً خود را از لیست Plugins مخفی می‌کنند،
+		ادمین مخفی می‌سازند، و از <code>mu-plugins</code> یا <code>wp-content/upgrade/</code> دوباره نصب می‌شوند.
+		ترتیب: <strong>فایل + دراپر</strong> → <strong>DB</strong> → <strong>تعمیر هسته</strong> → <strong>پسورد/FTP</strong>.
+	</p>
+	<ul class="mvn-kv">
+		<li>
+			<span>IoC روی دیسک</span>
+			<b class="<?php echo empty( $ghost['ioc_paths'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<?php echo empty( $ghost['ioc_paths'] ) ? 'یافت نشد' : esc_html( implode( '، ', $ghost['ioc_paths'] ) ); ?>
+			</b>
+		</li>
+		<li>
+			<span>لایه persistence</span>
+			<b class="<?php echo empty( $ghost['persistence'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<?php echo empty( $ghost['persistence'] ) ? 'یافت نشد' : esc_html( implode( '، ', $ghost['persistence'] ) ); ?>
+			</b>
+		</li>
+		<li>
+			<span>پلاگین مخفی (all_plugins)</span>
+			<b class="<?php echo empty( $ghost['hidden_plugins'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<?php echo empty( $ghost['hidden_plugins'] ) ? '۰' : esc_html( implode( '، ', $ghost['hidden_plugins'] ) ); ?>
+			</b>
+		</li>
+		<li>
+			<span>ادمین ghost</span>
+			<b class="<?php echo empty( $ghost['ghost_admins'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<?php
+				echo (int) $ghost['ghost_admins'];
+				if ( ! empty( $ghost['sql_admins'] ) || ! empty( $ghost['visible_admins'] ) ) {
+					echo ' <span class="mvn-muted">(SQL: ' . (int) $ghost['sql_admins'] . ' / UI: ' . (int) $ghost['visible_admins'] . ')</span>';
+				}
+				if ( ! empty( $ghost['ghost_admin_sample'] ) ) {
+					echo ' — نمونه: ' . esc_html( implode( '، ', $ghost['ghost_admin_sample'] ) );
+				}
+				?>
+			</b>
+		</li>
+		<li>
+			<span>option ردیابی</span>
+			<b class="<?php echo empty( $ghost['tracker_options'] ) ? 'mvn-ok' : 'mvn-bad'; ?>">
+				<?php echo empty( $ghost['tracker_options'] ) ? 'یافت نشد' : esc_html( implode( '، ', $ghost['tracker_options'] ) ); ?>
+			</b>
+		</li>
+	</ul>
+	<ol style="margin:12px 0 12px 1.4em;line-height:1.7">
+		<li>دکمه زیر: اول <code>db.php</code>/<code>advanced-cache.php</code> مخرب را خنثی می‌کند (قبل از MU لود می‌شوند و دوباره می‌سازند)، سپس IoC + <code>mu-plugins</code> + hex shells را پاک می‌کند و یک <code>db.php</code> امن موقت می‌گذارد.</li>
+		<li>اگر File Manager حذف نکرد: تیک «Move to Trash» را <strong>بردارید</strong>؛ اول <strong>محتوای داخل پوشه</strong> را پاک کنید بعد خود پوشه. پوشه‌های <code>cache</code>/<code>wpo-cache</code> را خالی کنید (نگه‌داشتن خود پوشه مشکلی ندارد).</li>
+		<li>ترتیب حیاتی روی هاست: <code>.user.ini</code> → فایل‌های hex مثل <code>81a….php</code> → <code>db.php</code> مشکوک → فایل‌های داخل <code>mu-plugins</code> (به‌خصوص <code>zonal-runner-tap.php</code>).</li>
+		<li>با SSH: <code>chattr -i فایل</code> سپس <code>rm -f</code>. بدون SSH، بعد از دکمه بالا یک‌بار سایت را باز کنید تا db امن + MU-killer reinfection را بکشند.</li>
+		<li>اسکن کامل + حذف ~۸۰ ادمین ghost از phpMyAdmin + تعمیر هسته + عوض کردن همه پسوردها/FTP/DB.</li>
+	</ol>
+	<button type="button" class="button button-primary" id="mvn-ghost-purge">
+		حذف فوری persistence + IoC + خنثی‌سازی db.php
+	</button>
+	<div id="mvn-ghost-purge-result" style="margin-top:10px"></div>
+	<p class="mvn-muted" style="margin-top:10px">
+		علت رایج «حذف نمی‌شود»: <code>db.php</code> مخرب قبل از همه‌چیز لود می‌شود و <code>zonal-runner-tap.php</code> را دوباره می‌نویسد.
+		نسخهٔ ۱.۸.۰ اول همان را خنثی می‌کند. بعد از پاک‌سازی موفق، <code>db.php</code> موقت MVN خودش حذف می‌شود؛ اگر ماند، دستی پاک کنید.
+	</p>
+</div>
+
 <div class="mvn-grid mvn-grid-2">
 	<div class="mvn-card">
 		<h2>بررسی یکپارچگی هسته (Core Checksum)</h2>

@@ -460,14 +460,18 @@ class MVN_DB_Scanner {
 	}
 
 	private static function action_for( $table, $row, $column, $sig_id ) {
-		if ( 'db_hidden_admin' === $sig_id || 'db_admin_capability' === $sig_id ) {
+		if ( 'db_hidden_admin' === $sig_id || 'db_admin_capability' === $sig_id || 'db_ghost_admin' === $sig_id ) {
 			return 'db_review';
 		}
-		if ( 'options' === $table && 'option_name' === $column && 'db_rogue_option_name' === $sig_id ) {
+		if ( 'options' === $table && 'option_name' === $column
+			&& in_array( $sig_id, array( 'db_rogue_option_name', 'db_malware_tracker_option' ), true ) ) {
 			$name = isset( $row['option_name'] ) ? $row['option_name'] : '';
 			if ( ! in_array( $name, mvn_db_protected_options(), true ) ) {
 				return 'db_delete_option';
 			}
+		}
+		if ( 'usermeta' === $table && 'db_malware_tracker_usermeta' === $sig_id ) {
+			return 'db_review';
 		}
 		if ( in_array( $column, array( 'post_content', 'post_excerpt' ), true ) ) {
 			return 'db_clean';

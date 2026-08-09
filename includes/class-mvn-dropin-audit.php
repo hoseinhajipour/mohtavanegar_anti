@@ -148,43 +148,161 @@ class MVN_Dropin_Audit {
 			if ( ! is_file( $abs ) ) {
 				continue;
 			}
+
+			// Hex zip droppers in wp-content root (e.g. a78b06dc.zip).
+			if ( preg_match( '/^\.?[a-f0-9]{6,16}\.zip$/i', $entry ) ) {
+				self::flag(
+					$state,
+					'wp-content/' . $entry,
+					'wpcontent_hex_zip',
+					'آرشیو hex مشکوک در ریشه wp-content',
+					'نام تصادفی hex + zip در ریشه محتوا — معمولاً بک‌آپ/دراپر بدافزار برای reinfection.',
+					'quarantine_delete',
+					@file_get_contents( $abs )
+				);
+				continue;
+			}
+
+			// .user.ini often holds auto_prepend_file backdoors.
+			if ( '.user.ini' === $entry || 'user.ini' === $entry || 'php.ini' === $entry ) {
+				$content = (string) @file_get_contents( $abs );
+				$bad     = (bool) preg_match( '/auto_prepend_file|auto_append_file/i', $content )
+					|| preg_match( '/[a-f0-9]{6,}\.php/i', $content );
+				self::flag(
+					$state,
+					'wp-content/' . $entry,
+					$bad ? 'user_ini_prepend' : 'user_ini_wpcontent',
+					$bad ? '.user.ini با auto_prepend (بک‌دور)' : '.user.ini در ریشه wp-content',
+					$bad
+						? 'این فایل PHP را قبل از وردپرس لود می‌کند و باعث قفل/بازنویسی بدافزار می‌شود. اول این را حذف کنید.'
+						: 'وجود .user.ini در wp-content غیرمعمول است — بررسی و حذف توصیه می‌شود.',
+					'quarantine_delete',
+					$content
+				);
+				continue;
+			}
+
 			$ext = strtolower( pathinfo( $entry, PATHINFO_EXTENSION ) );
 			if ( ! in_array( $ext, array( 'php', 'phtml', 'php5', 'php7', 'php8' ), true ) ) {
 				continue;
 			}
-			if ( in_array( $entry, $known, true ) ) {
+
+			$content = @file_get_contents( $abs );
+			$content = is_string( $content ) ? $content : '';
+
+			// Hex-named / hidden PHP shells: 81a4376c.php or .81a4376c.php
+			if ( preg_match( '/^\.?[a-f0-9]{6,16}\.php$/i', $entry ) ) {
+				self::flag(
+					$state,
+					'wp-content/' . $entry,
+					'wpcontent_hex_php',
+					'فایل PHP با نام hex در ریشه wp-content',
+					'الگوی کلاسیک webshell / dropper. این فایل اغلب مانع حذف بقیه می‌شود.',
+					'quarantine_delete',
+					$content
+				);
 				continue;
 			}
 
-			$rel     = 'wp-content/' . $entry;
-			$content = @file_get_contents( $abs );
-			$hash    = is_string( $content ) ? md5( $content ) : '';
-			$snippet = is_string( $content ) ? substr( preg_replace( '/\s+/', ' ', $content ), 0, 160 ) : '';
+			// Legitimate drop-in names: still flag if clearly malicious.
+			if ( in_array( $entry, $known, true ) ) {
+				if ( 'db.php' === $entry && self::db_php_looks_malicious( $content ) ) {
+					self::flag(
+						$state,
+						'wp-content/db.php',
+						'suspicious_db_dropin',
+						'dropin مشکوک db.php',
+						'db.php رسمی می‌تواند HyperDB/کش باشد؛ این نمونه نشانه obfuscation/بک‌دور دارد یا با shellهای hex هم‌زمان است.',
+						'quarantine_delete',
+						$content
+					);
+				}
+				continue;
+			}
 
-			if ( MVN_Scanner::add_finding(
+			self::flag(
 				$state,
-				array(
-					'rel'      => $rel,
-					'sig'      => 'unexpected_dropin',
-					'label'    => 'فایل PHP غیرمنتظره در ریشه wp-content (drop-in مشکوک)',
-					'severity' => 'critical',
-					'detail'   => 'فقط drop-inهای رسمی وردپرس در ریشه wp-content مجازند. این فایل می‌تواند بک‌دور باشد.',
-					'action'   => 'quarantine_delete',
-					'snippet'  => $snippet,
-					'source'   => 'dropin',
-				),
-				is_string( $content ) ? $content : '',
-				$hash
-			) ) {
-				if ( ! isset( $state['stats']['critical'] ) ) {
-					$state['stats']['critical'] = 0;
-				}
-				$state['stats']['critical']++;
-				if ( ! isset( $state['stats']['dropin'] ) ) {
-					$state['stats']['dropin'] = 0;
-				}
-				$state['stats']['dropin']++;
+				'wp-content/' . $entry,
+				'unexpected_dropin',
+				'فایل PHP غیرمنتظره در ریشه wp-content (drop-in مشکوک)',
+				'فقط drop-inهای رسمی وردپرس در ریشه wp-content مجازند. این فایل می‌تواند بک‌دور باشد.',
+				'quarantine_delete',
+				$content
+			);
+		}
+	}
+
+	/**
+	 * Heuristic: db.php drop-in used as malware loader.
+	 *
+	 * @param string $content File contents.
+	 */
+	private static function db_php_looks_malicious( $content ) {
+		if ( '' === $content ) {
+			return false;
+		}
+		// Our temporary safe bootstrap — never flag.
+		if ( false !== strpos( $content, 'MVN Safe DB Bootstrap' ) ) {
+			return false;
+		}
+		// Companion hex shells in same folder strongly imply compromised db.php.
+		$dir = WP_CONTENT_DIR;
+		foreach ( scandir( $dir ) ?: array() as $entry ) {
+			if ( preg_match( '/^\.?[a-f0-9]{6,16}\.php$/i', $entry ) ) {
+				return true;
 			}
 		}
+		if ( preg_match( '/\b(?:eval|assert|gzinflate|gzuncompress|str_rot13)\s*\(/i', $content )
+			&& preg_match( '/base64_decode|\\$_(?:POST|GET|REQUEST|COOKIE)|create_function|preg_replace\s*\(\s*[\'"].*\/e/i', $content ) ) {
+			return true;
+		}
+		if ( preg_match( '/auto_prepend_file|81a4376c|\.[a-f0-9]{8}\.php/i', $content ) ) {
+			return true;
+		}
+		// Heavy obfuscation without WordPress DB API markers.
+		if ( substr_count( $content, '\\x' ) > 80 && ! preg_match( '/wpdb|DB_HOST|mysqli_connect|hyperdb/i', $content ) ) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @param array       $state   Scan state.
+	 * @param string      $rel     Relative path.
+	 * @param string      $sig     Signature id.
+	 * @param string      $label   Label.
+	 * @param string      $detail  Detail.
+	 * @param string      $action  Fix action.
+	 * @param string|false $content Content.
+	 */
+	private static function flag( &$state, $rel, $sig, $label, $detail, $action, $content = '' ) {
+		$content = is_string( $content ) ? $content : '';
+		$hash    = '' !== $content ? md5( $content ) : md5( $rel . $sig );
+		$snippet = '' !== $content ? substr( preg_replace( '/\s+/', ' ', $content ), 0, 160 ) : '';
+		if ( ! MVN_Scanner::add_finding(
+			$state,
+			array(
+				'rel'      => $rel,
+				'sig'      => $sig,
+				'label'    => $label,
+				'severity' => 'critical',
+				'detail'   => $detail,
+				'action'   => $action,
+				'snippet'  => $snippet,
+				'source'   => 'dropin',
+			),
+			$content,
+			$hash
+		) ) {
+			return;
+		}
+		if ( ! isset( $state['stats']['critical'] ) ) {
+			$state['stats']['critical'] = 0;
+		}
+		$state['stats']['critical']++;
+		if ( ! isset( $state['stats']['dropin'] ) ) {
+			$state['stats']['dropin'] = 0;
+		}
+		$state['stats']['dropin']++;
 	}
 }

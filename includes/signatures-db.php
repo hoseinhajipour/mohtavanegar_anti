@@ -23,6 +23,18 @@ function mvn_db_heuristics() {
 				'callback' => 'mvn_db_heuristic_rogue_option_name',
 			),
 			array(
+				'id'       => 'db_malware_tracker_option',
+				'label'    => 'option ردیابی بدافزار (xdav / _pre_user_id)',
+				'severity' => 'critical',
+				'callback' => 'mvn_db_heuristic_malware_tracker_option',
+			),
+			array(
+				'id'       => 'db_malware_tracker_usermeta',
+				'label'    => 'usermeta ردیابی بدافزار (_wps_sig / _adm_key)',
+				'severity' => 'critical',
+				'callback' => 'mvn_db_heuristic_malware_tracker_usermeta',
+			),
+			array(
 				'id'       => 'db_hidden_admin',
 				'label'    => 'کاربر ادمین مشکوک / پنهان',
 				'severity' => 'critical',
@@ -231,8 +243,53 @@ function mvn_db_heuristic_rogue_option_name( $table, $row, $column, $content ) {
 	if ( preg_match( '/^[a-f0-9]{32}$/i', $name ) ) {
 		return 'نام option تصادفی (md5-like) — الگوی رایج بدافزار';
 	}
-	if ( preg_match( '/(?:shell|backdoor|eval|base64|hack|malware|c99|r57)/i', $name ) ) {
+	if ( preg_match( '/(?:shell|backdoor|eval|base64|hack|malware|c99|r57|xdav|tracker)/i', $name ) ) {
 		return 'نام option حاوی کلمات مشکوک';
+	}
+	return false;
+}
+
+/**
+ * Tracker options used by xdav-tracker / wp-security-helper / wp-compat families.
+ */
+function mvn_db_heuristic_malware_tracker_option( $table, $row, $column, $content ) {
+	if ( 'options' !== $table || 'option_name' !== $column ) {
+		return false;
+	}
+	$name = isset( $row['option_name'] ) ? (string) $row['option_name'] : $content;
+	if ( '' === $name || in_array( $name, mvn_db_protected_options(), true ) ) {
+		return false;
+	}
+	$known = class_exists( 'MVN_Ghost_Plugins' ) ? MVN_Ghost_Plugins::malware_option_names() : array( '_pre_user_id' );
+	if ( in_array( $name, $known, true ) ) {
+		return 'option ردیابی بدافزار شناخته‌شده: ' . $name;
+	}
+	if ( preg_match( '/(?:^_?pre_user_id$|xdav|security[-_]?helper|wp[-_]?compat|zonal[-_]?runner)/i', $name ) ) {
+		return 'option مشکوک خانواده بک‌دور مخفی: ' . $name;
+	}
+	return false;
+}
+
+/**
+ * Usermeta keys used by Hidden Admin Toolkit / fake plugin families (Imunify IoCs).
+ */
+function mvn_db_heuristic_malware_tracker_usermeta( $table, $row, $column, $content ) {
+	if ( 'usermeta' !== $table || 'meta_key' !== $column ) {
+		return false;
+	}
+	$key = isset( $row['meta_key'] ) ? (string) $row['meta_key'] : $content;
+	$bad = array(
+		'_wp_ui_render_cfg',
+		'_wp_cache_hash',
+		'_wps_sig',
+		'_sys_token',
+		'_bk_hash',
+		'_adm_key',
+		'_wp_sys_hash',
+		'_stk_sig',
+	);
+	if ( in_array( $key, $bad, true ) ) {
+		return 'usermeta ردیابی بدافزار: ' . $key;
 	}
 	return false;
 }
@@ -249,13 +306,19 @@ function mvn_db_heuristic_hidden_admin( $table, $row, $column, $content ) {
 	if ( 1 === (int) ( isset( $row['ID'] ) ? $row['ID'] : 0 ) ) {
 		return false;
 	}
-	$suspicious_login = preg_match( '/(?:\.php|wp-config|adminer|shell|backdoor|^[a-f0-9]{16,}$|wp_[a-f0-9]{6,})/i', $login );
-	$suspicious_email   = '' !== $email && ! is_email( $email );
+	$suspicious_login = preg_match(
+		'/(?:\.php|wp-config|adminer|shell|backdoor|^[a-f0-9]{16,}$|wp_[a-f0-9]{6,}|adminbackup|adm1nlxg1n|support_user|sys_maint|codepapa|helpdesk_?admin)/i',
+		$login
+	);
+	$suspicious_email = '' !== $email && (
+		! is_email( $email )
+		|| preg_match( '/@(?:wordpress\.org|w\.org)$/i', $email )
+	);
 	if ( $suspicious_login ) {
 		return 'نام کاربری مشکوک: ' . $login;
 	}
 	if ( $suspicious_email ) {
-		return 'ایمیل نامعتبر برای کاربر: ' . $login;
+		return 'ایمیل مشکوک برای کاربر «' . $login . '»: ' . $email;
 	}
 	return false;
 }
@@ -279,7 +342,7 @@ function mvn_db_heuristic_admin_capability( $table, $row, $column, $content ) {
 	if ( ! $user ) {
 		return 'کاربر ناشناس با capability ادمین';
 	}
-	if ( preg_match( '/(?:\.php|shell|backdoor|^[a-f0-9]{16,}$)/i', $user->user_login ) ) {
+	if ( preg_match( '/(?:\.php|shell|backdoor|^[a-f0-9]{16,}$|adminbackup|adm1nlxg1n)/i', $user->user_login ) ) {
 		return 'کاربر «' . $user->user_login . '» با دسترسی administrator مشکوک است';
 	}
 	return false;
