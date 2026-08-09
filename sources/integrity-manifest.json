@@ -1,8 +1,8 @@
 {
     "schema": 1,
-    "plugin_version": "2.0.0",
+    "plugin_version": "2.0.1",
     "algorithm": "sha256",
-    "generated_at": "2026-08-09T09:00:16+00:00",
+    "generated_at": "2026-08-09T09:17:10+00:00",
     "files": {
         ".git/cursor/crepe/985c430fd765247d85f612d00ecbd5f09e785c3c/metadata.json": "b19d807ea4b0e55b1b150cf900eb2ddf64e13bd3ce40ecf6e8c7fab6e4292b59",
         "admin/class-mvn-admin.php": "b65540221dcd600c1b7178839d370197547f11146c9da0fc755846c05752351c",
@@ -28,10 +28,10 @@
         "includes/class-mvn-db-scanner.php": "24d4a32d0beb1855e47e5e4c30b3d6a3ff6df36ac1f173ace19c9d8685c48f7f",
         "includes/class-mvn-dropin-audit.php": "91d66b872f0081d1342deed0f17025b51b2421232e43d5089ef561e54784a296",
         "includes/class-mvn-file-index.php": "57fce85d284cf192f10fc88e2643e226f4ce23bafd2b99b8392f3e6590ee3bf1",
-        "includes/class-mvn-ghost-plugins.php": "b16479f74c3226c658ff77fd0d372ea5c2994a5b94a35574323df276de721589",
-        "includes/class-mvn-hardening.php": "94268c283cbea5950e12c21937ab81a2c4704afec855bccbf390239452b7ed7e",
+        "includes/class-mvn-ghost-plugins.php": "1c19a5c23f6dde9b79705e8d70292110b7b3ee7d1cac0ab7a7c067af88b49ac4",
+        "includes/class-mvn-hardening.php": "e3ba8aef96e535294585fe6f2ec0483f0cea940d1c77614e5dbc0940dddf923b",
         "includes/class-mvn-htaccess-guard.php": "676cae5e45963b2dca9e44871a7ed1c88713fd7fc29fbc476379c73e39d60a17",
-        "includes/class-mvn-http-guard.php": "94cd47058dba482f234082616f27e3cfadf72690fc73db732c40a901cd084cd3",
+        "includes/class-mvn-http-guard.php": "c9ae9c8a86c6a993fe31fdf92bd9c208440a2d1ffb6d43fb9305041236c84991",
         "includes/class-mvn-ignore-list.php": "44d360816049086a092db12707e93f0a1184ee09ef880fdf945402b9ae5d9725",
         "includes/class-mvn-incidents.php": "83d617c0a42828ffbd23435c1e908759486f0406aeabd69aae04d23d96a0eec5",
         "includes/class-mvn-local-baseline.php": "48d28749b7024dd99f5e914b165053a1ccb918318e663be1f97b43814a195d85",
@@ -42,7 +42,7 @@
         "includes/class-mvn-quarantine.php": "2232231afb610c44e57f9e29f99e3716cae7ddb1901ee3ce84648904eed46402",
         "includes/class-mvn-repo-integrity.php": "3c8c17f2fa7a12bcb05d41bb7d93b5df6f60d54f1de4f1ac38d8521e854d201a",
         "includes/class-mvn-scanner.php": "27b1080d78c6831eea10ec7b5591b3463ae49b421db891a7d24df67c2b04aba0",
-        "includes/class-mvn-scheduler.php": "d1fdb06d7ff46cd68281c37dd2d1f76cd8384ccb3006b7338a30acc623a044c0",
+        "includes/class-mvn-scheduler.php": "2fa1b077fdf51daac016dea97a3933467da0377c3ed78fcea130ef2cdd47d720",
         "includes/class-mvn-self-integrity.php": "0419fd69818a203a70c001e451bae6104d5ddcfa8760753988af14b4c959148b",
         "includes/class-mvn-signature-pack.php": "d22d824e9306cb999351d2610ffa96013bb1220251f3b0802aae85a7d66d3796",
         "includes/class-mvn-theme-repair.php": "d7b17d692bc73e6e7bb79fb6954e9f39c83d55da47d962e1d1da81dfa704e465",
@@ -53,8 +53,8 @@
         "includes/repo-plugins.php": "d2ab056ca1a3d7df91a80aa211b6a293e7adef7e46dfe162017d356f1da042a1",
         "includes/signatures-db.php": "ae6e7241349131a04ef132f144df4c340a490e2a6d7b99911da84eda5da22d42",
         "includes/signatures.php": "1ce9186b5b5a2cb70b9b85872025e2d951d4defac4c3ae57f5e3965a65708204",
-        "mohtavanegar-antivirus.php": "111fc891c97fa44b06c90469bcde32b79b7409994f0d59cea4ee57d36b0b55d7",
-        "sources/mvn-emergency-clean.php": "293514005ffdd34636803dcf743c66d9ea188dbf9c8ec51d870062dfdf222840",
+        "mohtavanegar-antivirus.php": "b63f67a9e92d44fc0ed72e1feafda5175a192c54831086945835ae529f971584",
+        "sources/mvn-emergency-clean.php": "087281ff201e168ed1c96fbc4649b87fc600e7f1edc1b88a530f64d96c19abcd",
         "sources/signatures-pack.json": "51492c1d6926c34bafa2e9a66f2e02fbe82dd62acd9f6d9de8207eee0afe6190"
     }
 }

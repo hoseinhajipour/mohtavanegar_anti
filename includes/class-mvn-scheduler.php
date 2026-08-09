@@ -60,11 +60,13 @@ class MVN_Scheduler {
 	}
 
 	public static function status() {
+		// This is display-only. Do not depend on shell functions that hosts may disable.
+		$path = str_replace( array( "\r", "\n", '"' ), array( '', '', '\"' ), ABSPATH );
 		return array(
 			'quick_next' => wp_next_scheduled( self::QUICK ),
 			'full_next' => wp_next_scheduled( self::FULL ),
 			'cron_disabled' => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
-			'system_cron' => '*/5 * * * * wp --path=' . escapeshellarg( ABSPATH ) . ' cron event run --due-now --quiet',
+			'system_cron' => '*/5 * * * * wp --path="' . $path . '" cron event run --due-now --quiet',
 		);
 	}
 

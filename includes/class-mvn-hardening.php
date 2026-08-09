@@ -562,8 +562,9 @@ class MVN_Hardening {
 	}
 
 	public function audit_plugin_install( $upgrader, $options ) {
-		if ( ! empty( $options['type'] ) && 'plugin' === $options['type'] ) {
-			MVN_Audit_Log::record( 'plugin_changed', '', '', 'ok', array( 'action' => isset( $options['action'] ) ? $options['action'] : '' ) );
+		if ( ! empty( $options['type'] ) && in_array( $options['type'], array( 'plugin', 'theme' ), true ) ) {
+			delete_transient( 'mvn_installed_update_hosts' );
+			MVN_Audit_Log::record( $options['type'] . '_changed', '', '', 'ok', array( 'action' => isset( $options['action'] ) ? $options['action'] : '' ) );
 		}
 	}
 

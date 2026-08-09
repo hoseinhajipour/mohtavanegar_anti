@@ -288,19 +288,21 @@ class MVN_Ghost_Plugins {
 		if ( ! is_string( $abs ) || '' === $abs || ! is_file( $abs ) ) {
 			return;
 		}
-		$escaped = escapeshellarg( $abs );
-		$cmds    = array();
-		if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
-			$cmds[] = 'attrib -R -S -H ' . $escaped;
-		} else {
-			$cmds[] = 'chattr -i ' . $escaped . ' 2>/dev/null';
-			$cmds[] = 'chattr -a ' . $escaped . ' 2>/dev/null';
-		}
-		foreach ( $cmds as $cmd ) {
-			if ( function_exists( 'exec' ) ) {
-				@exec( $cmd );
-			} elseif ( function_exists( 'shell_exec' ) ) {
-				@shell_exec( $cmd );
+		if ( function_exists( 'escapeshellarg' ) && ( function_exists( 'exec' ) || function_exists( 'shell_exec' ) ) ) {
+			$escaped = escapeshellarg( $abs );
+			$cmds    = array();
+			if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
+				$cmds[] = 'attrib -R -S -H ' . $escaped;
+			} else {
+				$cmds[] = 'chattr -i ' . $escaped . ' 2>/dev/null';
+				$cmds[] = 'chattr -a ' . $escaped . ' 2>/dev/null';
+			}
+			foreach ( $cmds as $cmd ) {
+				if ( function_exists( 'exec' ) ) {
+					@exec( $cmd );
+				} else {
+					@shell_exec( $cmd );
+				}
 			}
 		}
 		@chmod( $abs, 0644 );
@@ -332,7 +334,9 @@ class MVN_Ghost_Plugins {
 		if ( ! is_string( $abs ) || '' === $abs || ! is_file( $abs ) ) {
 			return;
 		}
-		if ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY ) {
+		if ( ( defined( 'PHP_OS_FAMILY' ) && 'Windows' === PHP_OS_FAMILY )
+			|| ! function_exists( 'escapeshellarg' )
+			|| ( ! function_exists( 'exec' ) && ! function_exists( 'shell_exec' ) ) ) {
 			return; // no chattr on Windows dev; host is Linux.
 		}
 		$cmd = 'chattr +i ' . escapeshellarg( $abs ) . ' 2>/dev/null';
@@ -893,16 +897,16 @@ $__mvn_still = false;
 $__mvn_rm = static function ( $p ) {
 	if ( is_file( $p ) ) {
 		@chmod( $p, 0644 );
-		if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
+		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
 		if ( ! @unlink( $p ) ) { @rename( $p, $p . \'.__mvn_dead\' ); }
 	}
 };
 $__mvn_stub = static function ( $p ) {
 	if ( ! is_file( $p ) && ! is_dir( dirname( $p ) ) ) { return; }
-	if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
+	if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
 	@chmod( $p, 0644 );
 	@file_put_contents( $p, "<?php\n/* MVN Safe prepend stub. */\n" );
-	if ( function_exists( \'exec\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
+	if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $p ) . \' 2>/dev/null\' ); }
 };
 foreach ( array( ABSPATH, $__mvn_c, dirname( ABSPATH ) ) as $__d ) {
 	foreach ( array( \'.user.ini\', \'user.ini\' ) as $__n ) {
@@ -918,10 +922,10 @@ foreach ( array( ABSPATH, $__mvn_c, dirname( ABSPATH ) ) as $__d ) {
 				$__mvn_stub( $__t );
 			}
 		}
-		if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
+		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
 		@chmod( $__ini, 0644 );
 		@file_put_contents( $__ini, "; Neutralized by MVN Safe\n" );
-		if ( function_exists( \'exec\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
+		if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr +i \' . escapeshellarg( $__ini ) . \' 2>/dev/null\' ); }
 	}
 }
 $__mvn_mu = $__mvn_c . \'/mu-plugins\';
@@ -1889,7 +1893,7 @@ $__mvn_kill = static function () {
 	$rm = static function ( $path ) {
 		if ( is_file( $path ) ) {
 			@chmod( $path, 0644 );
-			if ( function_exists( \'exec\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $path ) . \' 2>/dev/null\' ); }
+			if ( function_exists( \'exec\' ) && function_exists( \'escapeshellarg\' ) ) { @exec( \'chattr -i \' . escapeshellarg( $path ) . \' 2>/dev/null\' ); }
 			if ( ! @unlink( $path ) ) { @rename( $path, $path . \'.__mvn_dead\' ); }
 			return;
 		}

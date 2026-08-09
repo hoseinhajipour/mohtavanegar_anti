@@ -94,7 +94,7 @@ class MVN_Http_Guard {
 		}
 
 		// Explicit allow always wins (آنبلاک).
-		foreach ( self::allowed_hosts() as $a ) {
+		foreach ( self::base_allowed_hosts() as $a ) {
 			if ( $this->host_matches( $host, $a ) ) {
 				return false;
 			}
@@ -112,6 +112,13 @@ class MVN_Http_Guard {
 				if ( $this->host_matches( $host, $b ) ) {
 					return true;
 				}
+			}
+		}
+
+		// Declared updater origins bypass only global block-all, never an explicit block.
+		foreach ( self::installed_update_hosts() as $update_host ) {
+			if ( $this->host_matches( $host, $update_host ) ) {
+				return false;
 			}
 		}
 
@@ -172,8 +179,55 @@ class MVN_Http_Guard {
 	 * @return string[]
 	 */
 	public static function allowed_hosts() {
+		return self::normalize_host_list( array_merge( self::base_allowed_hosts(), self::installed_update_hosts() ) );
+	}
+
+	private static function base_allowed_hosts() {
 		$required = class_exists( 'MVN_URL_Trust' ) ? MVN_URL_Trust::allowed_hosts() : array( 'api.wordpress.org', 'downloads.wordpress.org' );
 		return self::normalize_host_list( array_merge( get_option( self::OPTION_ALLOWED, array() ), $required ) );
+	}
+
+	/**
+	 * Trust updater origins explicitly declared by installed themes/plugins.
+	 *
+	 * ThemeURI is included because legacy custom updaters often predate Update URI.
+	 * Installing the extension is already equivalent to trusting its PHP code.
+	 *
+	 * @return string[]
+	 */
+	private static function installed_update_hosts() {
+		static $hosts = null;
+		if ( null !== $hosts ) {
+			return $hosts;
+		}
+		$hosts = get_transient( 'mvn_installed_update_hosts' );
+		if ( is_array( $hosts ) ) {
+			return $hosts;
+		}
+		$hosts = array();
+		if ( function_exists( 'wp_get_themes' ) ) {
+			foreach ( wp_get_themes() as $theme ) {
+				foreach ( array( 'UpdateURI', 'ThemeURI' ) as $header ) {
+					$url  = (string) $theme->get( $header );
+					$host = $url ? wp_parse_url( $url, PHP_URL_HOST ) : '';
+					if ( $host ) {
+						$hosts[] = strtolower( $host );
+					}
+				}
+			}
+		}
+		if ( function_exists( 'get_plugins' ) ) {
+			foreach ( get_plugins() as $plugin ) {
+				$url  = isset( $plugin['UpdateURI'] ) ? (string) $plugin['UpdateURI'] : '';
+				$host = $url ? wp_parse_url( $url, PHP_URL_HOST ) : '';
+				if ( $host ) {
+					$hosts[] = strtolower( $host );
+				}
+			}
+		}
+		$hosts = self::normalize_host_list( array_unique( $hosts ) );
+		set_transient( 'mvn_installed_update_hosts', $hosts, 6 * HOUR_IN_SECONDS );
+		return $hosts;
 	}
 
 	/**

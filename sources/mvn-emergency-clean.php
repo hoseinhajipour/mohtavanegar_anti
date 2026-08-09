@@ -77,7 +77,7 @@ $content = is_dir( $docroot . '/wp-content' ) ? $docroot . '/wp-content' : $docr
 $log     = array();
 
 function mvn_ec_can_exec() {
-	return function_exists( 'exec' ) || function_exists( 'shell_exec' );
+	return function_exists( 'escapeshellarg' ) && ( function_exists( 'exec' ) || function_exists( 'shell_exec' ) );
 }
 function mvn_ec_chattr( $path, $flag ) {
 	if ( ! mvn_ec_can_exec() || stripos( PHP_OS, 'WIN' ) === 0 ) {

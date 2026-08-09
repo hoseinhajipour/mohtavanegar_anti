@@ -12,7 +12,7 @@ $tmp  = str_replace( '\\', '/', sys_get_temp_dir() . '/mvn-security-tests-' . ge
 define( 'ABSPATH', $tmp . '/site/' );
 define( 'WP_CONTENT_DIR', $tmp . '/content' );
 define( 'MVN_PLUGIN_DIR', str_replace( '\\', '/', $root ) . '/' );
-define( 'MVN_VERSION', '2.0.0' );
+define( 'MVN_VERSION', '2.0.1' );
 define( 'MVN_OPTION_ISSUES', 'mvn_scan_issues' );
 define( 'DAY_IN_SECONDS', 86400 );
 define( 'MINUTE_IN_SECONDS', 60 );
@@ -121,6 +121,15 @@ $plugin_repair = file_get_contents( $root . '/includes/class-mvn-plugin-repair.p
 $theme_repair  = file_get_contents( $root . '/includes/class-mvn-theme-repair.php' );
 mvn_assert( false !== strpos( $plugin_repair, '.mvn-stage-' ) && false !== strpos( $plugin_repair, 'function rollback' ), 'plugin staging and rollback present' );
 mvn_assert( false !== strpos( $theme_repair, '.mvn-stage-' ) && false !== strpos( $theme_repair, 'function rollback' ), 'theme staging and rollback present' );
+$scheduler_source = file_get_contents( $root . '/includes/class-mvn-scheduler.php' );
+mvn_assert( false === strpos( $scheduler_source, 'escapeshellarg(' ), 'scheduler works when shell functions are disabled' );
+mvn_assert(
+	false !== strpos( $ghost_source, "function_exists( 'escapeshellarg' )" )
+	&& false !== strpos( file_get_contents( $root . '/sources/mvn-emergency-clean.php' ), "function_exists( 'escapeshellarg' )" ),
+	'shell attribute operations are capability-guarded'
+);
+$http_source = file_get_contents( $root . '/includes/class-mvn-http-guard.php' );
+mvn_assert( false !== strpos( $http_source, 'installed_update_hosts' ) && false !== strpos( $http_source, "'ThemeURI'" ), 'declared theme updater hosts bypass block-all' );
 $manifest = json_decode( file_get_contents( $root . '/sources/integrity-manifest.json' ), true );
 $manifest_ok = ! empty( $manifest['files'] );
 foreach ( isset( $manifest['files'] ) ? $manifest['files'] : array() as $rel => $hash ) {
