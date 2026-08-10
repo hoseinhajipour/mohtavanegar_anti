@@ -35,7 +35,10 @@ class MVN_Security_Rollback {
 		self::disable_maintenance( $public, $core );
 
 		$switch_bak = $public . '/.mvn-pre-gateway-bak';
-		$links      = MVN_Security_Migration::public_link_names();
+		$links      = array_merge(
+			MVN_Security_Migration::public_link_names(),
+			MVN_Security_Migration::public_evacuate_names()
+		);
 
 		// Remove gateway symlinks / gateway files first.
 		foreach ( $links as $name ) {

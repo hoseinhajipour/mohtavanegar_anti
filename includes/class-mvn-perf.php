@@ -12,9 +12,11 @@ class MVN_Perf {
 	const OPTION_ARM      = 'mvn_perf_arm';
 	const OPTION_LAST     = 'mvn_perf_last';
 	const OPTION_BLOCK    = 'mvn_perf_http_block';
+	const OPTION_FAST_HTTP = 'mvn_perf_fast_http';
 	const STATE_KEY       = 'perf_last';
 	const SLOW_QUERY_MS   = 50;
 	const SLOW_HTTP_MS    = 300;
+	const BLOCK_HTTP_MS   = 2000;
 	const MAX_QUERIES     = 400;
 	const MAX_HTTP        = 80;
 
@@ -42,6 +44,9 @@ class MVN_Perf {
 
 	public function boot() {
 		$this->boot_time = microtime( true );
+
+		// Always-on: shorten timeouts for non-allowlisted hosts after auto-optimize.
+		add_filter( 'http_request_args', array( __CLASS__, 'filter_fast_http_args' ), 20, 2 );
 
 		if ( ! $this->is_armed() ) {
 			return;
@@ -662,6 +667,17 @@ class MVN_Perf {
 			'vimeo.com',
 			'cdnjs.cloudflare.com',
 			'ajax.googleapis.com',
+			'elementor.com',
+			'my.elementor.com',
+			'assets.elementor.com',
+			'rankmath.com',
+			'woocommerce.com',
+			'api.woocommerce.com',
+			'gravitec.net',
+			'cdn.jsdelivr.net',
+			'unpkg.com',
+			'gtranslate.io',
+			'cdn.gtranslate.net',
 		);
 		if ( $home_host ) {
 			$list[] = strtolower( $home_host );
@@ -822,7 +838,7 @@ class MVN_Perf {
 	/* ===================== Optimize ===================== */
 
 	/**
-	 * Safe automatic optimizations.
+	 * Safe automatic optimizations driven by the last profiler report.
 	 *
 	 * @return array {actions:[], blocked_hosts:[], message:string}
 	 */
@@ -861,35 +877,27 @@ class MVN_Perf {
 			);
 		}
 
-		// 3) Block suspicious external hosts from last profile.
-		$blocked_now = array();
-		if ( ! empty( $report['http'] ) && is_array( $report['http'] ) ) {
-			foreach ( $report['http'] as $h ) {
-				$host  = isset( $h['host'] ) ? $h['host'] : '';
-				$flags = isset( $h['flags'] ) ? $h['flags'] : array();
-				if ( ! $host ) {
-					continue;
-				}
-				$bad = array_intersect( $flags, array( 'دامنه_مشکوک', 'اتصال_به_IP', 'درخواست_خارجی' ) );
-				// Only auto-block clearly malicious; external alone is too aggressive.
-				if ( array_intersect( $flags, array( 'دامنه_مشکوک', 'اتصال_به_IP' ) ) ) {
-					if ( self::block_host( $host ) ) {
-						$blocked_now[] = $host;
-					}
-				}
-			}
-		}
-		$blocked_now = array_values( array_unique( $blocked_now ) );
+		// 3) Block slow/failing external hosts from last profile (biggest real-world win).
+		// Example: medpress.net theme-updater hanging ~6s × 5 ≈ 30s of a 32s admin load.
+		$blocked_now = self::auto_block_hosts_from_report( $report );
 		if ( $blocked_now ) {
 			$actions[] = array(
 				'id'    => 'block_hosts',
-				'label' => 'مسدودسازی دامنه/IP مشکوک',
+				'label' => 'مسدودسازی دامنه کند/خراب (علت اصلی کندی)',
 				'count' => count( $blocked_now ),
 				'hosts' => $blocked_now,
 			);
 		}
 
-		// 4) Autoload: demote very large non-critical options (safe list only — transients leftovers).
+		// 3b) Cap HTTP timeouts for non-allowlisted hosts on every future request.
+		update_option( self::OPTION_FAST_HTTP, 1, false );
+		$actions[] = array(
+			'id'    => 'fast_http',
+			'label' => 'محدود کردن timeout درخواست‌های خارجی غیرضروری (۲ ثانیه)',
+			'count' => 1,
+		);
+
+		// 4) Autoload: demote very large non-critical options.
 		$demoted = self::demote_heavy_autoload();
 		if ( $demoted > 0 ) {
 			$actions[] = array(
@@ -899,7 +907,7 @@ class MVN_Perf {
 			);
 		}
 
-		// 4b) Orphan options from deleted plugins/themes (Xtra/Codevz, RevSlider, WOOF, …).
+		// 4b) Orphan options from deleted plugins/themes (RevSlider, Xtra, …).
 		$orphan_clean = self::purge_orphan_plugin_options( true );
 		if ( ! empty( $orphan_clean['count'] ) ) {
 			$actions[] = array(
@@ -911,7 +919,7 @@ class MVN_Perf {
 			);
 		}
 
-		// 5) Limit post revisions clutter (delete excess beyond 20 per post — capped).
+		// 5) Limit post revisions clutter.
 		$revisions = self::prune_old_revisions( 20, 200 );
 		if ( $revisions > 0 ) {
 			$actions[] = array(
@@ -921,8 +929,18 @@ class MVN_Perf {
 			);
 		}
 
+		// 5b) Purge old Action Scheduler junk (completed/failed) that slows admin menus.
+		$as_purged = self::purge_old_action_scheduler( 7, 500 );
+		if ( $as_purged > 0 ) {
+			$actions[] = array(
+				'id'    => 'action_scheduler',
+				'label' => 'پاکسازی Action Scheduler قدیمی',
+				'count' => $as_purged,
+			);
+		}
+
 		// 6) Optimize main tables (quick).
-		$tables = array( $wpdb->options, $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->term_taxonomy );
+		$tables = array( $wpdb->options, $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->term_taxonomy, $wpdb->comments );
 		foreach ( $tables as $t ) {
 			$wpdb->query( "OPTIMIZE TABLE `{$t}`" ); // phpcs:ignore WordPress.DB.PreparedSQL
 		}
@@ -932,7 +950,7 @@ class MVN_Perf {
 			'count' => count( $tables ),
 		);
 
-		// 7) Object cache flush.
+		// 7) Object / page cache flush.
 		if ( function_exists( 'wp_cache_flush' ) ) {
 			wp_cache_flush();
 			$actions[] = array(
@@ -941,14 +959,166 @@ class MVN_Perf {
 				'count' => 1,
 			);
 		}
+		if ( has_action( 'litespeed_purge_all' ) ) {
+			do_action( 'litespeed_purge_all' );
+			$actions[] = array(
+				'id'    => 'litespeed_purge',
+				'label' => 'پاکسازی کش LiteSpeed',
+				'count' => 1,
+			);
+		}
 
 		mvn_log( 'Perf optimize done: ' . wp_json_encode( wp_list_pluck( $actions, 'id' ) ) );
+
+		$msg = 'بهینه‌سازی انجام شد.';
+		if ( $blocked_now ) {
+			$msg .= ' دامنه‌های کند مسدود شدند: ' . implode( ', ', $blocked_now ) . '.';
+			$msg .= ' لود بعدی باید به‌مراتب سریع‌تر باشد.';
+		}
 
 		return array(
 			'actions'       => $actions,
 			'blocked_hosts' => self::blocked_hosts(),
-			'message'       => empty( $actions ) ? 'مورد قابل بهینه‌سازی پیدا نشد.' : 'بهینه‌سازی انجام شد.',
+			'message'       => $msg,
 		);
+	}
+
+	/**
+	 * Decide which hosts from a profiler report should be blocked.
+	 *
+	 * @param array $report Last report.
+	 * @return string[] Newly blocked hosts.
+	 */
+	public static function auto_block_hosts_from_report( $report ) {
+		if ( empty( $report['http'] ) || ! is_array( $report['http'] ) ) {
+			return array();
+		}
+
+		$stats = array();
+		foreach ( $report['http'] as $h ) {
+			$host = isset( $h['host'] ) ? strtolower( (string) $h['host'] ) : '';
+			if ( ! $host || self::host_is_allowlisted( $host ) ) {
+				continue;
+			}
+			if ( ! isset( $stats[ $host ] ) ) {
+				$stats[ $host ] = array(
+					'count'   => 0,
+					'fail'    => 0,
+					'max_ms'  => 0,
+					'sum_ms'  => 0,
+					'flags'   => array(),
+				);
+			}
+			$ms   = isset( $h['ms'] ) ? (float) $h['ms'] : 0;
+			$code = isset( $h['code'] ) ? (int) $h['code'] : 0;
+			$flags = isset( $h['flags'] ) && is_array( $h['flags'] ) ? $h['flags'] : array();
+
+			$stats[ $host ]['count']++;
+			$stats[ $host ]['sum_ms'] += $ms;
+			$stats[ $host ]['max_ms']  = max( $stats[ $host ]['max_ms'], $ms );
+			$stats[ $host ]['flags']   = array_values( array_unique( array_merge( $stats[ $host ]['flags'], $flags ) ) );
+			if ( 0 === $code || $code >= 500 || in_array( 'خطای_شبکه', $flags, true ) ) {
+				$stats[ $host ]['fail']++;
+			}
+		}
+
+		$blocked_now = array();
+		foreach ( $stats as $host => $s ) {
+			$should = false;
+			if ( array_intersect( $s['flags'], array( 'دامنه_مشکوک', 'اتصال_به_IP' ) ) ) {
+				$should = true;
+			}
+			// Failed external updater / API (cURL empty reply, timeouts, …).
+			if ( $s['fail'] > 0 && in_array( 'درخواست_خارجی', $s['flags'], true ) ) {
+				$should = true;
+			}
+			// Extremely slow external host even without hard fail.
+			if ( $s['max_ms'] >= self::BLOCK_HTTP_MS && in_array( 'درخواست_خارجی', $s['flags'], true ) ) {
+				$should = true;
+			}
+			// Repeated slow hits (≥2) totaling serious delay.
+			if ( $s['count'] >= 2 && $s['sum_ms'] >= 4000 && in_array( 'درخواست_خارجی', $s['flags'], true ) ) {
+				$should = true;
+			}
+
+			if ( $should && self::block_host( $host ) ) {
+				$blocked_now[] = $host;
+				// Also push into HTTP Guard blocklist when available.
+				if ( class_exists( 'MVN_Http_Guard', false ) && method_exists( 'MVN_Http_Guard', 'block_host' ) ) {
+					MVN_Http_Guard::block_host( $host );
+				}
+			}
+		}
+
+		return array_values( array_unique( $blocked_now ) );
+	}
+
+	/**
+	 * @param string $host Host.
+	 * @return bool
+	 */
+	public static function host_is_allowlisted( $host ) {
+		$host = strtolower( (string) $host );
+		foreach ( self::http_allowlist() as $suffix ) {
+			$suffix = strtolower( (string) $suffix );
+			if ( $host === $suffix || substr( $host, -strlen( '.' . $suffix ) ) === '.' . $suffix ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Cap timeouts for non-allowlisted HTTP after auto-optimize.
+	 *
+	 * @param array  $args Request args.
+	 * @param string $url  URL.
+	 * @return array
+	 */
+	public static function filter_fast_http_args( $args, $url ) {
+		if ( ! get_option( self::OPTION_FAST_HTTP, 0 ) ) {
+			return $args;
+		}
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( ! $host || self::host_is_allowlisted( $host ) ) {
+			return $args;
+		}
+		// Never let a dead theme/plugin updater stall admin for 5–15s.
+		$cap = 2;
+		if ( ! isset( $args['timeout'] ) || (float) $args['timeout'] > $cap ) {
+			$args['timeout'] = $cap;
+		}
+		if ( ! isset( $args['redirection'] ) || (int) $args['redirection'] > 2 ) {
+			$args['redirection'] = 2;
+		}
+		return $args;
+	}
+
+	/**
+	 * Delete old completed/failed Action Scheduler rows.
+	 *
+	 * @param int $days  Age in days.
+	 * @param int $limit Max rows.
+	 * @return int
+	 */
+	private static function purge_old_action_scheduler( $days = 7, $limit = 500 ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'actionscheduler_actions';
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$exists = $wpdb->get_var( "SHOW TABLES LIKE '" . esc_sql( $table ) . "'" );
+		if ( $exists !== $table ) {
+			return 0;
+		}
+		$cutoff = gmdate( 'Y-m-d H:i:s', time() - ( max( 1, (int) $days ) * DAY_IN_SECONDS ) );
+		$limit  = max( 1, (int) $limit );
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$n = (int) $wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM `{$table}` WHERE status IN ('complete','failed','canceled') AND scheduled_date_gmt < %s LIMIT {$limit}",
+				$cutoff
+			)
+		);
+		return max( 0, $n );
 	}
 
 	private static function purge_expired_transients() {

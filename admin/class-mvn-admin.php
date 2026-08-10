@@ -73,6 +73,7 @@ class MVN_Admin {
 			'mvn_security_preflight',
 			'mvn_security_migrate_start',
 			'mvn_security_migrate_tick',
+			'mvn_security_migrate_abort',
 			'mvn_security_rollback',
 			'mvn_security_reverify',
 			'mvn_http_guard_list',
@@ -358,7 +359,7 @@ class MVN_Admin {
 
 	private function guard() {
 		$action = isset( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
-		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_security_preflight', 'mvn_security_migrate_start', 'mvn_security_migrate_tick', 'mvn_security_rollback', 'mvn_security_reverify', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
+		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_security_preflight', 'mvn_security_migrate_start', 'mvn_security_migrate_tick', 'mvn_security_migrate_abort', 'mvn_security_rollback', 'mvn_security_reverify', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
 		$scan_only = array( 'mvn_scan_start', 'mvn_scan_tick', 'mvn_scan_status', 'mvn_scan_pause', 'mvn_scan_resume', 'mvn_scan_stop', 'mvn_core_integrity_start', 'mvn_core_integrity_tick', 'mvn_as_scan_start', 'mvn_as_scan_tick', 'mvn_fix_preview' );
 		$cap = in_array( $action, $configure, true ) ? 'mvn_configure' : ( in_array( $action, $scan_only, true ) ? 'mvn_scan' : 'mvn_remediate' );
 		if ( ! current_user_can( $cap ) ) {
@@ -1050,6 +1051,20 @@ class MVN_Admin {
 			wp_send_json_error( $payload );
 		}
 		$result['payload'] = MVN_Security_Migration::admin_payload();
+		wp_send_json_success( $result );
+	}
+
+	public function ajax_security_migrate_abort() {
+		$this->guard();
+		@set_time_limit( 180 );
+		$confirm = isset( $_POST['confirm'] ) ? sanitize_text_field( wp_unslash( $_POST['confirm'] ) ) : '';
+		if ( 'abort' !== $confirm ) {
+			wp_send_json_error( array( 'message' => 'تأیید لغو ارسال نشده است.' ), 400 );
+		}
+		$result = MVN_Security_Migration::abort();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
 		wp_send_json_success( $result );
 	}
 

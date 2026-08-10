@@ -19,8 +19,10 @@ class MVN_Security_Migration {
 
 	const OPTION       = 'mvn_security_migration_status';
 	const STATE_FILE   = 'security_migration';
-	const COPY_CHUNK   = 40;
-	const BUSY_STATUSES = array( 'preflight', 'backup', 'copying', 'verifying', 'switching', 'testing', 'cleanup', 'rollback' );
+	const COPY_CHUNK   = 80;
+	const LIST_DIR_CHUNK = 35;
+	const TICK_SECONDS = 10;
+	const BUSY_STATUSES = array( 'preflight', 'backup', 'listing', 'copying', 'verifying', 'switching', 'testing', 'cleanup', 'rollback' );
 
 	/**
 	 * Names exposed in the public root via symlink after migration.
@@ -45,6 +47,26 @@ class MVN_Security_Migration {
 	}
 
 	/**
+	 * Root files that must leave the public web root after switch
+	 * (already copied into the relocated core).
+	 *
+	 * @return string[]
+	 */
+	public static function public_evacuate_names() {
+		return array(
+			'wp-config.php',
+			'wp-config-sample.php',
+			'wp-load.php',
+			'wp-settings.php',
+			'wp-blog-header.php',
+			'wp-config.php.bak',
+			'readme.html',
+			'license.txt',
+			'licens.txt',
+		);
+	}
+
+	/**
 	 * @return array
 	 */
 	public static function defaults() {
@@ -61,6 +83,7 @@ class MVN_Security_Migration {
 			'error'                  => '',
 			'copy_offset'            => 0,
 			'copy_total'             => 0,
+			'list_byte'              => 0,
 			'lock_token'             => '',
 			'remove_core_on_rollback'=> 1,
 			'gateway_healthy'        => 0,
@@ -165,6 +188,7 @@ class MVN_Security_Migration {
 
 	/**
 	 * Start migration after a successful preflight.
+	 * If a migration is already in progress, resume it instead of failing.
 	 *
 	 * @return array|WP_Error
 	 */
@@ -173,7 +197,14 @@ class MVN_Security_Migration {
 			return new WP_Error( 'already', 'Security Gateway از قبل فعال است.' );
 		}
 		if ( self::is_busy() ) {
-			return new WP_Error( 'busy', 'مهاجرت دیگری در حال اجراست.' );
+			$state = self::get_state();
+			// Long copy must not leave the site in maintenance after a dropped AJAX request.
+			self::disable_maintenance( $state['public_path'], isset( $state['core_path'] ) ? $state['core_path'] : null );
+			return array(
+				'state'   => $state,
+				'resumed' => 1,
+				'message' => 'مهاجرت ناتمام پیدا شد — ادامه می‌یابد (' . $state['status'] . ').',
+			);
 		}
 
 		$pre = MVN_Security_Validator::preflight();
@@ -181,7 +212,7 @@ class MVN_Security_Migration {
 			return new WP_Error( 'preflight', 'پیش‌نیازها برقرار نیست.', $pre );
 		}
 
-		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 3600 );
+		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 7200 );
 		if ( ! $lock ) {
 			return new WP_Error( 'job_locked', 'یک عملیات اسکن/تعمیر دیگر در حال اجراست.' );
 		}
@@ -219,15 +250,60 @@ class MVN_Security_Migration {
 		mvn_state_write(
 			self::STATE_FILE,
 			array(
-				'files'  => array(),
-				'built'  => 0,
-				'phase'  => 'backup',
+				'list_file' => '',
+				'dir_queue' => array( '' ),
+				'list_count'=> 0,
+				'built'     => 0,
+				'phase'     => 'backup',
 			)
 		);
 
 		return array(
 			'state'   => self::get_state(),
+			'resumed' => 0,
 			'message' => 'مهاجرت آغاز شد.',
+		);
+	}
+
+	/**
+	 * Abort an in-progress migration that has not switched the public root yet.
+	 *
+	 * @return array|WP_Error
+	 */
+	public static function abort() {
+		$state = self::get_state();
+		if ( ! self::is_busy() && 'failed' !== $state['status'] ) {
+			return new WP_Error( 'not_busy', 'مهاجرت فعالی برای لغو وجود ندارد.' );
+		}
+
+		$switched = is_file( $state['public_path'] . '/index.php' )
+			&& false !== strpos( (string) @file_get_contents( $state['public_path'] . '/index.php' ), 'MVN_SECURITY_GATEWAY' );
+		if ( $switched || is_dir( $state['public_path'] . '/.mvn-pre-gateway-bak' ) ) {
+			return new WP_Error( 'use_rollback', 'سوییچ انجام شده؛ از دکمه بازگردانی استفاده کنید.' );
+		}
+
+		$logger = new MVN_Security_Logger( ! empty( $state['log_file'] ) ? $state['log_file'] : ( mvn_data_dir() . '/logs/migration-abort.log' ) );
+		$logger->warn( 'Migration aborted by admin' );
+
+		self::disable_maintenance( $state['public_path'], isset( $state['core_path'] ) ? $state['core_path'] : null );
+
+		if ( ! empty( $state['core_path'] ) && is_dir( $state['core_path'] ) && self::assert_migration_path( $state['core_path'], $state['public_path'] ) ) {
+			MVN_Security_Rollback::force_remove( $state['core_path'] );
+			$logger->info( 'Incomplete core copy removed' );
+		}
+
+		if ( ! empty( $state['lock_token'] ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $state['lock_token'] );
+		} else {
+			delete_option( 'mvn_lock_filesystem_mutation' );
+		}
+
+		self::save_state( self::defaults() );
+		mvn_state_delete( self::STATE_FILE );
+
+		return array(
+			'state'   => self::get_state(),
+			'message' => 'مهاجرت ناتمام لغو شد. می‌توانید دوباره شروع کنید.',
 		);
 	}
 
@@ -251,6 +327,8 @@ class MVN_Security_Migration {
 			switch ( $state['status'] ) {
 				case 'backup':
 					return self::tick_backup( $state, $logger );
+				case 'listing':
+					return self::tick_listing( $state, $logger );
 				case 'copying':
 					return self::tick_copy( $state, $logger );
 				case 'verifying':
@@ -347,8 +425,7 @@ class MVN_Security_Migration {
 		$public = $state['public_path'];
 		$backup = $state['backup_dir'];
 
-		self::enable_maintenance( $public );
-
+		// Do NOT enable maintenance for the long copy phase — only during switch.
 		$index = $public . '/index.php';
 		$ht    = $public . '/.htaccess';
 		if ( is_file( $index ) && ! @copy( $index, $backup . '/public-index.php' ) ) {
@@ -358,7 +435,6 @@ class MVN_Security_Migration {
 			return self::fail( $state, $logger, 'بک‌آپ .htaccess ناموفق بود.', true );
 		}
 
-		// Snapshot of important constants / paths (no secrets).
 		$meta = array(
 			'abspath'        => ABSPATH,
 			'wp_content_dir' => WP_CONTENT_DIR,
@@ -373,7 +449,6 @@ class MVN_Security_Migration {
 		);
 		mvn_atomic_write( $backup . '/meta.json', wp_json_encode( $meta ), 0600 );
 
-		// Copy wp-config to backup only (still contains secrets — chmod 0600, never log).
 		$cfg = $public . '/wp-config.php';
 		if ( is_file( $cfg ) ) {
 			@copy( $cfg, $backup . '/wp-config.php.bak' );
@@ -383,28 +458,137 @@ class MVN_Security_Migration {
 		$plugin_opt = get_option( MVN_OPTION_HARDENING, array() );
 		mvn_atomic_write( $backup . '/plugin-hardening.json', wp_json_encode( $plugin_opt ), 0600 );
 
-		$logger->info( 'Backup completed' );
-
-		// Build file list for copy (line-delimited file — avoids huge JSON in memory).
 		$list_file = $backup . '/file-list.txt';
-		$count     = self::build_file_list_to( $public, $state['core_path'], $list_file );
-		if ( false === $count ) {
-			return self::fail( $state, $logger, 'ساخت فهرست فایل‌ها ناموفق بود.', true );
-		}
+		@file_put_contents( $list_file, '' );
+
 		mvn_state_write(
 			self::STATE_FILE,
 			array(
-				'list_file' => $list_file,
-				'built'     => 1,
-				'phase'     => 'copying',
+				'list_file'  => $list_file,
+				'dir_queue'  => array( '' ),
+				'list_count' => 0,
+				'built'      => 0,
+				'phase'      => 'listing',
 			)
 		);
 
+		$logger->info( 'Backup completed' );
+		$logger->info( 'File listing started (chunked)' );
+
+		$state['status']      = 'listing';
+		$state['copy_offset'] = 0;
+		$state['copy_total']  = 0;
+		$state['list_byte']   = 0;
+		self::save_state( $state );
+
+		return self::tick_response( $state, 'در حال فهرست‌سازی فایل‌ها…' );
+	}
+
+	/**
+	 * Chunked directory walk — avoids one huge AJAX request timing out.
+	 *
+	 * @param array               $state  State.
+	 * @param MVN_Security_Logger $logger Logger.
+	 * @return array|WP_Error
+	 */
+	private static function tick_listing( array $state, MVN_Security_Logger $logger ) {
+		$job = mvn_state_read( self::STATE_FILE, array() );
+		$list_file = isset( $job['list_file'] ) ? (string) $job['list_file'] : '';
+		$queue     = isset( $job['dir_queue'] ) && is_array( $job['dir_queue'] ) ? $job['dir_queue'] : array();
+		$count     = isset( $job['list_count'] ) ? (int) $job['list_count'] : 0;
+
+		if ( ! $list_file ) {
+			return self::fail( $state, $logger, 'مسیر فهرست فایل نامعتبر است.', true );
+		}
+
+		$public = mvn_normalize_path( $state['public_path'] );
+		$core   = mvn_normalize_path( $state['core_path'] );
+		$skip_names = array( '.mvn-pre-gateway-bak', '.git', '.svn', 'node_modules', '.DS_Store' );
+
+		$fh = @fopen( $list_file, 'ab' );
+		if ( false === $fh ) {
+			return self::fail( $state, $logger, 'باز کردن فهرست فایل ناموفق بود.', true );
+		}
+
+		$deadline = time() + self::TICK_SECONDS;
+		$dirs_done = 0;
+
+		while ( $queue && $dirs_done < self::LIST_DIR_CHUNK && time() < $deadline ) {
+			$rel_dir = array_shift( $queue );
+			$rel_dir = is_string( $rel_dir ) ? str_replace( '\\', '/', $rel_dir ) : '';
+			if ( false !== strpos( $rel_dir, '..' ) ) {
+				$dirs_done++;
+				continue;
+			}
+			$abs_dir = '' === $rel_dir ? $public : ( $public . '/' . $rel_dir );
+			if ( ! is_dir( $abs_dir ) ) {
+				$dirs_done++;
+				continue;
+			}
+
+			$entries = @scandir( $abs_dir );
+			if ( ! is_array( $entries ) ) {
+				$dirs_done++;
+				continue;
+			}
+
+			foreach ( $entries as $name ) {
+				if ( '.' === $name || '..' === $name ) {
+					continue;
+				}
+				if ( in_array( $name, $skip_names, true ) ) {
+					continue;
+				}
+				$rel = '' === $rel_dir ? $name : ( $rel_dir . '/' . $name );
+				if ( false !== strpos( $rel, '..' ) || false !== strpos( $rel, "\n" ) ) {
+					continue;
+				}
+				if ( preg_match( '#^wp-content/mvn-data/backups/security-migration-#', $rel ) ) {
+					continue;
+				}
+				$abs = $public . '/' . $rel;
+				if ( $core && 0 === strpos( mvn_normalize_path( $abs ), $core . '/' ) ) {
+					continue;
+				}
+				if ( is_dir( $abs ) && ! is_link( $abs ) ) {
+					$queue[] = $rel;
+					continue;
+				}
+				if ( is_file( $abs ) || is_link( $abs ) ) {
+					fwrite( $fh, $rel . "\n" );
+					$count++;
+				}
+			}
+			$dirs_done++;
+		}
+		fclose( $fh );
+
+		mvn_state_write(
+			self::STATE_FILE,
+			array(
+				'list_file'  => $list_file,
+				'dir_queue'  => array_values( $queue ),
+				'list_count' => $count,
+				'built'      => empty( $queue ) ? 1 : 0,
+				'phase'      => empty( $queue ) ? 'copying' : 'listing',
+			)
+		);
+
+		if ( ! empty( $queue ) ) {
+			$state['copy_total'] = $count;
+			self::save_state( $state );
+			return self::tick_response(
+				$state,
+				sprintf( 'فهرست‌سازی… %d فایل · %d پوشه باقی‌مانده', $count, count( $queue ) )
+			);
+		}
+
+		$logger->info( 'File list built: ' . $count . ' files' );
 		$state['status']      = 'copying';
 		$state['copy_offset'] = 0;
-		$state['copy_total']  = (int) $count;
+		$state['copy_total']  = $count;
+		$state['list_byte']   = 0;
 		self::save_state( $state );
-		$logger->info( 'File list built: ' . (int) $count . ' files' );
 
 		return self::tick_response( $state, 'در حال کپی فایل‌ها…' );
 	}
@@ -430,32 +614,66 @@ class MVN_Security_Migration {
 			return self::fail( $state, $logger, 'مسیر مقصد خارج از محدوده مجاز است.', true );
 		}
 
-		$offset = (int) $state['copy_offset'];
-		$total  = (int) $state['copy_total'];
-		$chunk  = self::read_list_slice( $list_file, $offset, self::COPY_CHUNK );
-		$i      = 0;
-		foreach ( $chunk as $rel ) {
+		$offset    = (int) $state['copy_offset'];
+		$total     = (int) $state['copy_total'];
+		$list_byte = isset( $state['list_byte'] ) ? (int) $state['list_byte'] : 0;
+		$deadline  = time() + self::TICK_SECONDS;
+
+		$fh = @fopen( $list_file, 'rb' );
+		if ( false === $fh ) {
+			return self::fail( $state, $logger, 'خواندن فهرست فایل ناموفق بود.', true );
+		}
+		if ( $list_byte > 0 ) {
+			fseek( $fh, $list_byte );
+		} elseif ( $offset > 0 ) {
+			// Resume legacy jobs that only stored a line offset.
+			$skipped = 0;
+			while ( $skipped < $offset && ! feof( $fh ) ) {
+				if ( false === fgets( $fh ) ) {
+					break;
+				}
+				$skipped++;
+			}
+			$list_byte = (int) ftell( $fh );
+		}
+
+		$copied = 0;
+		while ( $copied < self::COPY_CHUNK && time() < $deadline && ! feof( $fh ) ) {
+			$line = fgets( $fh );
+			if ( false === $line ) {
+				break;
+			}
+			$rel = trim( $line );
+			$offset++;
+			if ( '' === $rel || false !== strpos( $rel, '..' ) ) {
+				continue;
+			}
 			$src = $public . '/' . $rel;
 			$dst = $core . '/' . $rel;
 			if ( ! is_file( $src ) && ! is_link( $src ) ) {
-				$i++;
+				$copied++;
 				continue;
 			}
 			$dir = dirname( $dst );
 			if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+				fclose( $fh );
 				return self::fail( $state, $logger, 'ساخت پوشه ناموفق: ' . $rel, true );
 			}
 			if ( ! @copy( $src, $dst ) ) {
+				fclose( $fh );
 				return self::fail( $state, $logger, 'کپی ناموفق: ' . $rel, true );
 			}
-			$i++;
+			$copied++;
 		}
+		$new_byte = ftell( $fh );
+		$eof      = feof( $fh );
+		fclose( $fh );
 
-		$end = $offset + count( $chunk );
-		$state['copy_offset'] = $end;
+		$state['copy_offset'] = $offset;
 		$state['copy_total']  = $total;
+		$state['list_byte']   = (int) $new_byte;
 
-		if ( $end >= $total || ! $chunk ) {
+		if ( $eof || ( $total > 0 && $offset >= $total ) ) {
 			$logger->info( 'WordPress files copied' );
 			$state['status'] = 'verifying';
 			self::save_state( $state );
@@ -465,7 +683,7 @@ class MVN_Security_Migration {
 		self::save_state( $state );
 		return self::tick_response(
 			$state,
-			sprintf( 'کپی فایل‌ها %d / %d', $end, $total )
+			sprintf( 'کپی فایل‌ها %d / %d', min( $offset, max( $total, $offset ) ), max( $total, $offset ) )
 		);
 	}
 
@@ -526,6 +744,8 @@ class MVN_Security_Migration {
 		$public = $state['public_path'];
 		$core   = $state['core_path'];
 		$bak    = $public . '/.mvn-pre-gateway-bak';
+
+		self::enable_maintenance( $public );
 
 		if ( ! is_dir( $bak ) && ! wp_mkdir_p( $bak ) ) {
 			return self::fail( $state, $logger, 'ساخت پوشه بک‌آپ سوییچ ناموفق بود.', true );
@@ -601,6 +821,31 @@ class MVN_Security_Migration {
 			}
 		}
 
+		// Move secrets / bootstrap leftovers out of the public root (copies already exist in core).
+		foreach ( self::public_evacuate_names() as $name ) {
+			$src_public = $public . '/' . $name;
+			if ( ! file_exists( $src_public ) && ! is_link( $src_public ) ) {
+				continue;
+			}
+			$bak_path = $bak . '/' . $name;
+			if ( file_exists( $bak_path ) || is_link( $bak_path ) ) {
+				MVN_Security_Rollback::force_remove( $bak_path );
+			}
+			if ( is_link( $src_public ) ) {
+				@unlink( $src_public );
+				continue;
+			}
+			if ( ! @rename( $src_public, $bak_path ) ) {
+				// Last resort: unlink only when core already has the file.
+				if ( is_file( $core . '/' . $name ) && @unlink( $src_public ) ) {
+					$logger->warn( 'Removed public leftover after failed rename: ' . $name );
+					continue;
+				}
+				return self::fail( $state, $logger, 'انتقال فایل حساس از ریشه وب ناموفق: ' . $name, true );
+			}
+			$logger->info( 'Evacuated from public root: ' . $name );
+		}
+
 		// Install gateway index + htaccess (after links so admin assets resolve).
 		$tmp_index = $public . '/.mvn-index-new.php';
 		$tmp_ht    = $public . '/.mvn-htaccess-new';
@@ -656,28 +901,41 @@ class MVN_Security_Migration {
 		$state['verification'] = $ver;
 		$state['last_verification'] = isset( $ver['at'] ) ? $ver['at'] : gmdate( 'Y-m-d H:i:s' );
 
+		$failed_critical = array();
+		$failed_soft     = array();
 		foreach ( $ver['tests'] as $t ) {
 			if ( ! empty( $t['ok'] ) ) {
 				$logger->info( $t['label'] . ' passed' );
+				continue;
+			}
+			$line = $t['label'] . ' failed: ' . $t['detail'];
+			if ( ! empty( $t['critical'] ) ) {
+				$logger->error( $line );
+				$failed_critical[] = $t['label'];
 			} else {
-				$logger->error( $t['label'] . ' failed: ' . $t['detail'] );
+				$logger->warn( $line );
+				$failed_soft[] = $t['label'];
 			}
 		}
 
-		if ( empty( $ver['ok'] ) ) {
-			$logger->error( 'Verification failed — starting automatic rollback' );
+		if ( ! empty( $failed_critical ) || empty( $ver['ok'] ) ) {
+			$logger->error( 'Critical verification failed — starting automatic rollback' );
 			$state['status'] = 'rollback';
-			$state['error']  = 'آزمون‌های پس از مهاجرت ناموفق بود؛ بازگشت خودکار…';
+			$state['error']  = 'آزمون‌های حیاتی پس از مهاجرت ناموفق بود: ' . implode( '، ', $failed_critical );
 			$state['remove_core_on_rollback'] = 1;
 			self::save_state( $state );
 			return self::tick_rollback( $state, $logger );
+		}
+
+		if ( $failed_soft ) {
+			$logger->warn( 'Soft verification warnings (kept migration): ' . implode( ', ', $failed_soft ) );
 		}
 
 		$state['gateway_healthy'] = 1;
 		$state['status'] = 'cleanup';
 		self::save_state( $state );
 		$logger->info( 'All critical verification tests passed' );
-		return self::tick_response( $state, 'در حال پاکسازی…' );
+		return self::tick_response( $state, $failed_soft ? 'آزمون حیاتی OK — در حال پاکسازی…' : 'در حال پاکسازی…' );
 	}
 
 	/**
@@ -819,6 +1077,7 @@ class MVN_Security_Migration {
 				'status' => $fresh['status'],
 				'offset' => (int) $fresh['copy_offset'],
 				'total'  => (int) $fresh['copy_total'],
+				'phase'  => $fresh['status'],
 			),
 		);
 	}

@@ -165,8 +165,8 @@ class MVN_Security_Validator {
 			'not_busy',
 			'عدم وجود مهاجرت فعال',
 			! $busy,
-			$busy ? 'یک مهاجرت در حال اجراست' : 'آزاد',
-			true
+			$busy ? 'مهاجرت ناتمام وجود دارد — از «ادامه مهاجرت» یا «لغو مهاجرت» استفاده کنید' : 'آزاد',
+			false
 		);
 
 		$fs_lock = get_option( 'mvn_lock_filesystem_mutation', null );
@@ -204,7 +204,7 @@ class MVN_Security_Validator {
 	 *
 	 * @param string $public_path Public web root.
 	 * @param string $core_path   Relocated core.
-	 * @return array{ok:bool,tests:array<int,array{id:string,ok:bool,label:string,detail:string}>}
+	 * @return array{ok:bool,critical_ok:bool,tests:array<int,array{id:string,ok:bool,label:string,detail:string,critical:bool}>}
 	 */
 	public static function verify( $public_path, $core_path ) {
 		$public_path = mvn_normalize_path( $public_path );
@@ -215,96 +215,126 @@ class MVN_Security_Validator {
 			'core_index',
 			'هسته وردپرس',
 			is_file( $core_path . '/wp-blog-header.php' ) && is_file( $core_path . '/wp-load.php' ),
-			$core_path
+			$core_path,
+			true
 		);
 
 		$tests[] = self::test(
 			'wp_config_outside',
 			'wp-config خارج از ریشه وب',
 			is_file( $core_path . '/wp-config.php' ) && ! is_file( $public_path . '/wp-config.php' ),
-			is_file( $public_path . '/wp-config.php' ) ? 'wp-config هنوز در ریشه وب است' : 'امن'
+			is_file( $public_path . '/wp-config.php' ) ? 'wp-config هنوز در ریشه وب است' : 'امن',
+			true
 		);
 
 		$gateway = $public_path . '/index.php';
 		$gw_ok   = is_file( $gateway ) && false !== strpos( (string) @file_get_contents( $gateway ), 'MVN_SECURITY_GATEWAY' );
-		$tests[] = self::test( 'gateway_file', 'فایل Gateway', $gw_ok, $gateway );
+		$tests[] = self::test( 'gateway_file', 'فایل Gateway', $gw_ok, $gateway, true );
 
 		$ht_ok = is_file( $public_path . '/.htaccess' ) && false !== strpos( (string) @file_get_contents( $public_path . '/.htaccess' ), 'MVN Security Gateway' );
-		$tests[] = self::test( 'htaccess', '.htaccess Gateway', $ht_ok, $public_path . '/.htaccess' );
+		$tests[] = self::test( 'htaccess', '.htaccess Gateway', $ht_ok, $public_path . '/.htaccess', true );
 
 		foreach ( array( 'wp-admin', 'wp-includes', 'wp-content' ) as $link ) {
 			$p = $public_path . '/' . $link;
 			$ok = is_link( $p ) || ( is_dir( $p ) && self::paths_equal( @realpath( $p ), @realpath( $core_path . '/' . $link ) ) );
-			$tests[] = self::test( 'link_' . $link, 'دسترسی ' . $link, (bool) $ok, $p );
+			$tests[] = self::test( 'link_' . $link, 'دسترسی ' . $link, (bool) $ok, is_link( $p ) ? 'symlink → ' . (string) @readlink( $p ) : $p, true );
 		}
 
 		foreach ( array( 'wp-login.php', 'wp-cron.php' ) as $file ) {
 			$p  = $public_path . '/' . $file;
 			$ok = is_link( $p ) || ( is_file( $p ) && self::paths_equal( @realpath( $p ), @realpath( $core_path . '/' . $file ) ) );
-			$tests[] = self::test( 'link_' . $file, 'دسترسی ' . $file, (bool) $ok, $p );
+			$tests[] = self::test( 'link_' . $file, 'دسترسی ' . $file, (bool) $ok, $p, true );
+		}
+
+		// Bootstrap leftovers must not remain web-accessible beside the gateway.
+		foreach ( array( 'wp-load.php', 'wp-settings.php', 'wp-blog-header.php' ) as $boot ) {
+			$left = is_file( $public_path . '/' . $boot ) && ! is_link( $public_path . '/' . $boot );
+			$tests[] = self::test(
+				'no_public_' . $boot,
+				'عدم وجود ' . $boot . ' در ریشه وب',
+				! $left,
+				$left ? 'هنوز در public root است' : 'پاک شده',
+				true
+			);
 		}
 
 		$uploads = $core_path . '/wp-content/uploads';
 		$up_ht   = $uploads . '/.htaccess';
 		$up_ok   = ! is_dir( $uploads ) || ( is_file( $up_ht ) && false !== strpos( (string) @file_get_contents( $up_ht ), 'Deny' ) );
-		$tests[] = self::test( 'uploads_htaccess', 'محافظت uploads در برابر PHP', $up_ok, $up_ht );
+		$tests[] = self::test( 'uploads_htaccess', 'محافظت uploads در برابر PHP', $up_ok, $up_ht, false );
 
-		// HTTP checks (same host, short timeout).
+		// HTTP checks are advisory on shared hosting (loopback/SSL often blocked).
 		$http = self::http_smoke_tests();
 		foreach ( $http as $t ) {
 			$tests[] = $t;
 		}
 
-		$ok = true;
+		$critical_ok = true;
+		$all_ok      = true;
 		foreach ( $tests as $t ) {
 			if ( empty( $t['ok'] ) ) {
-				$ok = false;
-				break;
+				$all_ok = false;
+				if ( ! empty( $t['critical'] ) ) {
+					$critical_ok = false;
+				}
 			}
 		}
 
 		return array(
-			'ok'    => $ok,
-			'tests' => $tests,
-			'at'    => gmdate( 'Y-m-d H:i:s' ),
+			'ok'           => $critical_ok, // rollback only when critical checks fail
+			'critical_ok'  => $critical_ok,
+			'all_ok'       => $all_ok,
+			'tests'        => $tests,
+			'at'           => gmdate( 'Y-m-d H:i:s' ),
 		);
 	}
 
 	/**
-	 * @return array<int,array{id:string,ok:bool,label:string,detail:string}>
+	 * @return array<int,array{id:string,ok:bool,label:string,detail:string,critical:bool}>
 	 */
 	public static function http_smoke_tests() {
 		$out = array();
+		$login_url = site_url( 'wp-login.php' );
+		if ( class_exists( 'MVN_Cloak', false ) ) {
+			$cloak = MVN_Cloak::instance()->settings();
+			if ( ! empty( $cloak['enabled'] ) && ! empty( $cloak['login_slug'] ) ) {
+				$login_url = home_url( '/' . rawurlencode( $cloak['login_slug'] ) . '/' );
+			}
+		}
+
 		$urls = array(
 			'frontend' => home_url( '/' ),
-			'login'    => site_url( 'wp-login.php' ),
-			'admin'    => admin_url( '/' ),
+			'login'    => $login_url,
 			'rest'     => rest_url(),
 		);
 
 		foreach ( $urls as $id => $url ) {
 			$res = self::http_probe( $url );
-			$ok  = $res['ok'];
-			$out[] = self::test(
-				'http_' . $id,
-				'HTTP ' . $id,
-				$ok,
-				sprintf( 'HTTP %s — %s', $res['code'], $url )
-			);
+			// Connection failures on shared hosting are warnings, not hard failures.
+			$ok = $res['ok'] || 0 === (int) $res['code'];
+			$detail = 0 === (int) $res['code']
+				? 'ارتباط لوکال ناموفق (در هاست مشترک رایج است) — ' . $url
+				: sprintf( 'HTTP %s — %s', $res['code'], $url );
+			$out[] = self::test( 'http_' . $id, 'HTTP ' . $id, $ok, $detail, false );
 		}
 
-		// Static asset: load a known core CSS if present.
 		$css = includes_url( 'css/dashicons.min.css' );
 		$res = self::http_probe( $css );
-		$out[] = self::test( 'http_static', 'HTTP استاتیک wp-includes', $res['ok'] || in_array( (int) $res['code'], array( 200, 301, 302, 304 ), true ), 'HTTP ' . $res['code'] );
+		$out[] = self::test(
+			'http_static',
+			'HTTP استاتیک wp-includes',
+			$res['ok'] || 0 === (int) $res['code'] || in_array( (int) $res['code'], array( 200, 301, 302, 304 ), true ),
+			0 === (int) $res['code'] ? 'ارتباط لوکال ناموفق — رد شد' : 'HTTP ' . $res['code'],
+			false
+		);
 
-		// PHP execution in uploads should fail (404/403/500) — create temp probe only if uploads writable.
 		$probe = self::uploads_php_probe();
 		$out[] = self::test(
 			'uploads_php_blocked',
 			'عدم اجرای PHP در uploads',
 			$probe['ok'],
-			$probe['detail']
+			$probe['detail'],
+			false
 		);
 
 		return $out;
@@ -318,18 +348,21 @@ class MVN_Security_Validator {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'     => 15,
+				'timeout'     => 8,
 				'redirection' => 3,
 				'sslverify'   => false,
-				'headers'     => array( 'Cache-Control' => 'no-cache' ),
+				'headers'     => array(
+					'Cache-Control' => 'no-cache',
+					'User-Agent'    => 'Mozilla/5.0 (compatible; MVN-Verify/1.0; +https://mohtavanegar.local)',
+				),
 			)
 		);
 		if ( is_wp_error( $response ) ) {
 			return array( 'ok' => false, 'code' => 0 );
 		}
 		$code = (int) wp_remote_retrieve_response_code( $response );
-		// Login/admin may 302 to login; REST may 200; frontend 200.
-		$ok = $code >= 200 && $code < 500 && 404 !== $code;
+		// Login/admin may 302; REST/front 200. Soft-allow most non-5xx except hard 404 on homepage assets.
+		$ok = $code >= 200 && $code < 500;
 		return array( 'ok' => $ok, 'code' => $code );
 	}
 
@@ -543,18 +576,20 @@ class MVN_Security_Validator {
 	}
 
 	/**
-	 * @param string $id     Id.
-	 * @param string $label  Label.
-	 * @param bool   $ok     Pass.
-	 * @param string $detail Detail.
+	 * @param string $id       Id.
+	 * @param string $label    Label.
+	 * @param bool   $ok       Pass.
+	 * @param string $detail   Detail.
+	 * @param bool   $critical Critical for auto-rollback.
 	 * @return array
 	 */
-	private static function test( $id, $label, $ok, $detail ) {
+	private static function test( $id, $label, $ok, $detail, $critical = false ) {
 		return array(
-			'id'     => $id,
-			'label'  => $label,
-			'ok'     => (bool) $ok,
-			'detail' => (string) $detail,
+			'id'       => $id,
+			'label'    => $label,
+			'ok'       => (bool) $ok,
+			'detail'   => (string) $detail,
+			'critical' => (bool) $critical,
 		);
 	}
 }

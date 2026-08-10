@@ -1652,7 +1652,7 @@
   $('#mvn-perf-optimize').on('click', function () {
     if (
       !window.confirm(
-        'بهینه‌سازی خودکار اجرا شود؟\n\n• پاکسازی transient\n• حذف باقی‌مانده پلاگین‌های حذف‌شده از autoload (Xtra/Codevz، RevSlider، WOOF و …)\n• مسدودسازی دامنه مشکوک\n• حذف revision قدیمی\n• OPTIMIZE TABLE'
+        'بهینه‌سازی خودکار اجرا شود؟\n\n• مسدودسازی دامنه‌های کند/خراب (مثل آپدیتور قالب که ۶ثانیه می‌ماند)\n• محدود کردن timeout HTTP خارجی\n• پاکسازی transient و Action Scheduler\n• حذف باقی‌مانده پلاگین‌های حذف‌شده از autoload\n• حذف revision قدیمی\n• OPTIMIZE TABLE + پاکسازی کش'
       )
     ) {
       return;
@@ -1745,6 +1745,7 @@
 
   /* ---------- Security Architecture ---------- */
   var secBusy = false;
+  var secRetries = 0;
 
   function renderPreflight(pre) {
     var $box = $('#mvn-sec-preflight-box');
@@ -1772,13 +1773,18 @@
     );
   }
 
+  function secSetControls(running) {
+    $('#mvn-sec-migrate, #mvn-sec-preflight, #mvn-sec-abort').prop('disabled', !!running);
+  }
+
   function secTickLoop() {
     if (!secBusy) return;
-    post('mvn_security_migrate_tick', {}, { timeout: 200000 })
+    post('mvn_security_migrate_tick', {}, { timeout: 120000 })
       .done(function (res) {
+        secRetries = 0;
         if (!res || !res.success) {
           secBusy = false;
-          $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+          secSetControls(false);
           notice(
             $('#mvn-sec-result'),
             (res && res.data && res.data.message) || MVN.i18n.error,
@@ -1789,11 +1795,13 @@
         var d = res.data || {};
         var prog = d.progress || {};
         var pctVal = 5;
-        if (prog.total) {
-          pctVal = Math.min(95, Math.round((prog.offset / prog.total) * 80) + 10);
+        if (prog.status === 'listing') {
+          pctVal = Math.min(25, 5 + Math.round((prog.offset || 0) / 500));
+        } else if (prog.total) {
+          pctVal = Math.min(95, Math.round((prog.offset / prog.total) * 70) + 25);
         }
-        if (prog.status === 'verifying' || prog.status === 'switching') pctVal = 85;
-        if (prog.status === 'testing') pctVal = 92;
+        if (prog.status === 'verifying' || prog.status === 'switching') pctVal = 88;
+        if (prog.status === 'testing') pctVal = 94;
         if (prog.status === 'cleanup' || d.done) pctVal = 100;
         $('#mvn-sec-progress-wrap').show();
         $('#mvn-sec-progress-bar').css('width', pctVal + '%');
@@ -1803,18 +1811,28 @@
         }
         if (d.done) {
           secBusy = false;
+          secSetControls(false);
           notice($('#mvn-sec-result'), d.message || 'تمام شد', true);
           window.setTimeout(function () {
             location.reload();
           }, 1200);
           return;
         }
-        window.setTimeout(secTickLoop, 400);
+        window.setTimeout(secTickLoop, 250);
       })
       .fail(function (xhr) {
+        // Transient proxy/PHP timeouts are common on large copies — retry a few times.
+        if (secRetries < 5) {
+          secRetries++;
+          $('#mvn-sec-progress-label').text(
+            'قطع موقت ارتباط — تلاش مجدد ' + secRetries + '/5 …'
+          );
+          window.setTimeout(secTickLoop, 1500 * secRetries);
+          return;
+        }
         secBusy = false;
-        $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
-        var msg = 'خطای ارتباط';
+        secSetControls(false);
+        var msg = 'خطای ارتباط — روی «ادامه مهاجرت» بزنید تا از همان‌جا ادامه شود';
         if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
           msg = xhr.responseJSON.data.message;
         }
@@ -1846,19 +1864,23 @@
   });
 
   $('#mvn-sec-migrate').on('click', function () {
-    var msg = $(this).data('confirm') || MVN.i18n.confirm;
-    if (!window.confirm(msg)) return;
+    var isResume = $(this).text().indexOf('ادامه') !== -1;
+    if (!isResume) {
+      var msg = $(this).data('confirm') || MVN.i18n.confirm;
+      if (!window.confirm(msg)) return;
+    }
     if (secBusy) return;
     secBusy = true;
-    $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', true);
+    secRetries = 0;
+    secSetControls(true);
     $('#mvn-sec-progress-wrap').show();
     $('#mvn-sec-progress-bar').css('width', '2%');
-    $('#mvn-sec-progress-label').text('شروع مهاجرت…');
+    $('#mvn-sec-progress-label').text(isResume ? 'ادامه مهاجرت…' : 'شروع مهاجرت…');
     post('mvn_security_migrate_start', { confirm: 'migrate' }, { timeout: 120000 })
       .done(function (res) {
         if (!res || !res.success) {
           secBusy = false;
-          $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+          secSetControls(false);
           if (res && res.data && res.data.preflight) {
             renderPreflight(res.data.preflight);
           }
@@ -1874,7 +1896,33 @@
       })
       .fail(function () {
         secBusy = false;
-        $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+        secSetControls(false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
+  });
+
+  $('#mvn-sec-abort').on('click', function () {
+    var msg = $(this).data('confirm') || MVN.i18n.confirm;
+    if (!window.confirm(msg)) return;
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_security_migrate_abort', { confirm: 'abort' }, { timeout: 180000 })
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (res && res.success) {
+          notice($('#mvn-sec-result'), res.data.message || 'لغو شد', true);
+          window.setTimeout(function () {
+            location.reload();
+          }, 800);
+        } else {
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+        }
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
         notice($('#mvn-sec-result'), 'خطای ارتباط', false);
       });
   });

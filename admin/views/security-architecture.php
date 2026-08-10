@@ -119,18 +119,34 @@ $preflight = isset( $preflight_result ) && is_array( $preflight_result ) ? $pref
 			</div>
 		<?php endif; ?>
 
+		<?php if ( $busy ) : ?>
+			<div class="mvn-notice mvn-notice-ok">
+				مهاجرت ناتمام در وضعیت <code><?php echo esc_html( $status ); ?></code> متوقف شده است
+				<?php if ( ! empty( $state['copy_total'] ) ) : ?>
+					— پیشرفت کپی: <?php echo (int) $state['copy_offset']; ?> / <?php echo (int) $state['copy_total']; ?>
+				<?php endif; ?>
+				. می‌توانید ادامه دهید یا لغو کنید.
+			</div>
+		<?php endif; ?>
+
 		<div class="mvn-actions" style="margin-top:14px;gap:8px;flex-wrap:wrap">
-			<button type="button" class="button" id="mvn-sec-preflight" <?php disabled( $busy ); ?>>اجرای پیش‌نیاز امنیتی</button>
-			<button type="button" class="button button-primary" id="mvn-sec-migrate" <?php disabled( $busy ); ?>
+			<button type="button" class="button" id="mvn-sec-preflight">اجرای پیش‌نیاز امنیتی</button>
+			<button type="button" class="button button-primary" id="mvn-sec-migrate"
 				data-confirm="وردپرس به خارج از ریشه وب منتقل شود؟ این کار برگشت‌پذیر است اما سنگین است. ادامه می‌دهید؟">
-				انتقال وردپرس به خارج از ریشه وب
+				<?php echo $busy ? 'ادامه مهاجرت' : 'انتقال وردپرس به خارج از ریشه وب'; ?>
 			</button>
+			<?php if ( $busy || 'failed' === $status ) : ?>
+				<button type="button" class="button button-link-delete" id="mvn-sec-abort"
+					data-confirm="مهاجرت ناتمام لغو شود و کپی ناقص پاک گردد؟">
+					لغو مهاجرت ناتمام
+				</button>
+			<?php endif; ?>
 			<span id="mvn-sec-result"></span>
 		</div>
 
-		<div id="mvn-sec-progress-wrap" class="mvn-progress-wrap" style="display:none;margin-top:14px">
-			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-sec-progress-bar" style="width:0%"></div></div>
-			<p class="mvn-progress-meta" id="mvn-sec-progress-label">…</p>
+		<div id="mvn-sec-progress-wrap" class="mvn-progress-wrap" style="<?php echo $busy ? '' : 'display:none;'; ?>margin-top:14px">
+			<div class="mvn-progress"><div class="mvn-progress-bar" id="mvn-sec-progress-bar" style="width:<?php echo $busy && ! empty( $state['copy_total'] ) ? min( 95, (int) round( ( (int) $state['copy_offset'] / max( 1, (int) $state['copy_total'] ) ) * 80 ) + 10 ) : 0; ?>%"></div></div>
+			<p class="mvn-progress-meta" id="mvn-sec-progress-label"><?php echo $busy ? 'آماده ادامه…' : '…'; ?></p>
 		</div>
 	<?php endif; ?>
 
