@@ -3,7 +3,7 @@
  * Plugin Name:       Mohtavanegar Antivirus
  * Plugin URI:        https://mohtavanegar.local/
  * Description:       آنتی‌ویروس وردپرس: اسکن بدافزار، حذف کدهای تزریق‌شده، تعمیر فایل‌های هسته از سورس سالم، بازیابی htaccess، حذف htaccess های جعلی، سخت‌سازی امنیتی (Brute Force، XMLRPC، سطح دسترسی‌ها).
- * Version:           2.1.4
+ * Version:           2.2.0
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            Mohtavanegar Security
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MVN_VERSION', '2.1.4' );
+define( 'MVN_VERSION', '2.2.0' );
 define( 'MVN_PLUGIN_FILE', __FILE__ );
 define( 'MVN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MVN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -36,6 +36,7 @@ require_once MVN_PLUGIN_DIR . 'includes/helpers.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-url-trust.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-log.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-hardening.php';
+require_once MVN_PLUGIN_DIR . 'includes/class-mvn-cloak.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-http-guard.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-perf.php';
 require_once MVN_PLUGIN_DIR . 'includes/class-mvn-scheduler.php';
@@ -85,6 +86,12 @@ function mvn_load_engine() {
 	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-plugin-repair.php';
 	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-theme-repair.php';
 	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-permissions.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-logger.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-rule.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-gateway.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-validator.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-rollback.php';
+	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-security-migration.php';
 	require_once MVN_PLUGIN_DIR . 'includes/class-mvn-cli.php';
 }
 
@@ -130,6 +137,7 @@ function mvn_deactivate() {
 }
 
 MVN_Hardening::instance()->boot();
+MVN_Cloak::instance()->boot();
 MVN_Http_Guard::instance()->boot();
 MVN_Perf::instance()->boot();
 MVN_Scheduler::boot();

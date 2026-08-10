@@ -23,6 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				'mvn-cron'         => 'Cron',
 				'mvn-repair'       => 'تعمیر هسته',
 				'mvn-hardening'    => 'سخت‌سازی',
+				'mvn-security-arch'=> 'معماری امنیتی',
 				'mvn-quarantine'   => 'قرنطینه',
 				'mvn-perf'         => 'سرعت لود',
 			);

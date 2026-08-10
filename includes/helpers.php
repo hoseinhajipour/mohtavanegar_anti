@@ -614,6 +614,16 @@ function mvn_security_checklist( $ctx = array() ) {
 			'action' => 'سخت‌سازی',
 		),
 		array(
+			'id'     => 'cloak',
+			'title'  => 'مخفی‌سازی مسیر ورود از ربات‌ها',
+			'desc'   => ( class_exists( 'MVN_Cloak' ) && ! empty( MVN_Cloak::instance()->settings()['enabled'] ) )
+				? 'فعال — ' . MVN_Cloak::instance()->public_urls()['login_url']
+				: 'wp-login.php هنوز عمومی است',
+			'done'   => class_exists( 'MVN_Cloak' ) && ! empty( MVN_Cloak::instance()->settings()['enabled'] ),
+			'url'    => admin_url( 'admin.php?page=mvn-hardening' ),
+			'action' => 'سخت‌سازی',
+		),
+		array(
 			'id'     => 'headers',
 			'title'  => 'هدرهای امنیتی HTTP',
 			'desc'   => ! empty( $hard['secure_headers'] ) ? 'فعال' : 'غیرفعال',

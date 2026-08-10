@@ -1221,7 +1221,7 @@
   $('#mvn-hardening-form').on('submit', function (e) {
     e.preventDefault();
     var data = $(this).serializeArray();
-    var payload = { settings: {} };
+    var payload = { settings: {}, cloak: {} };
     // Unchecked checkboxes won't appear — start from zeros for known keys.
     var keys = [
       'block_xmlrpc',
@@ -1243,10 +1243,27 @@
     keys.forEach(function (k) {
       payload.settings[k] = 0;
     });
+    var cloakKeys = [
+      'enabled',
+      'hide_wp_admin',
+      'remove_meta_files',
+      'block_fingerprint_files',
+      'disable_emoji',
+      'strip_meta_generator',
+    ];
+    cloakKeys.forEach(function (k) {
+      payload.cloak[k] = 0;
+    });
+    payload.cloak.login_slug = 'mvn-access';
+    payload.cloak.admin_slug = '';
     data.forEach(function (item) {
       var m = item.name.match(/^settings\[(.+)\]$/);
       if (m) {
         payload.settings[m[1]] = item.value;
+      }
+      var cm = item.name.match(/^cloak\[(.+)\]$/);
+      if (cm) {
+        payload.cloak[cm[1]] = item.value;
       }
       if (item.name === 'schedule_enabled') {
         payload.schedule_enabled = item.value;
@@ -1261,6 +1278,11 @@
           notice($('#mvn-hardening-result'), res.data.message, true);
           if (res.data.http_guard) {
             renderHttpGuard(res.data.http_guard);
+          }
+          if (res.data.cloak && res.data.cloak.enabled) {
+            window.setTimeout(function () {
+              window.location.reload();
+            }, 900);
           }
         } else {
           notice($('#mvn-hardening-result'), (res && res.data && res.data.message) || MVN.i18n.error, false);
@@ -1719,5 +1741,191 @@
         alert((res && res.data && res.data.message) || MVN.i18n.error);
       }
     });
+  });
+
+  /* ---------- Security Architecture ---------- */
+  var secBusy = false;
+
+  function renderPreflight(pre) {
+    var $box = $('#mvn-sec-preflight-box');
+    if (!$box.length || !pre || !pre.checks) return;
+    var rows = pre.checks
+      .map(function (c) {
+        var badge = c.ok
+          ? '<span class="mvn-badge mvn-badge-info">OK</span>'
+          : '<span class="mvn-badge mvn-badge-critical">FAIL</span>';
+        return (
+          '<tr><td>' +
+          $('<div>').text(c.label || '').html() +
+          '</td><td>' +
+          badge +
+          '</td><td class="mvn-path" dir="ltr"><code>' +
+          $('<div>').text(c.detail || '').html() +
+          '</code></td></tr>'
+        );
+      })
+      .join('');
+    $box.html(
+      '<h3>نتیجه پیش‌نیاز</h3><table class="widefat striped mvn-table"><thead><tr><th>بررسی</th><th>وضعیت</th><th>جزئیات</th></tr></thead><tbody>' +
+        rows +
+        '</tbody></table>'
+    );
+  }
+
+  function secTickLoop() {
+    if (!secBusy) return;
+    post('mvn_security_migrate_tick', {}, { timeout: 200000 })
+      .done(function (res) {
+        if (!res || !res.success) {
+          secBusy = false;
+          $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+          return;
+        }
+        var d = res.data || {};
+        var prog = d.progress || {};
+        var pctVal = 5;
+        if (prog.total) {
+          pctVal = Math.min(95, Math.round((prog.offset / prog.total) * 80) + 10);
+        }
+        if (prog.status === 'verifying' || prog.status === 'switching') pctVal = 85;
+        if (prog.status === 'testing') pctVal = 92;
+        if (prog.status === 'cleanup' || d.done) pctVal = 100;
+        $('#mvn-sec-progress-wrap').show();
+        $('#mvn-sec-progress-bar').css('width', pctVal + '%');
+        $('#mvn-sec-progress-label').text(d.message || prog.status || '…');
+        if (d.payload && d.payload.log_lines) {
+          $('#mvn-sec-log').show().text(d.payload.log_lines.join('\n'));
+        }
+        if (d.done) {
+          secBusy = false;
+          notice($('#mvn-sec-result'), d.message || 'تمام شد', true);
+          window.setTimeout(function () {
+            location.reload();
+          }, 1200);
+          return;
+        }
+        window.setTimeout(secTickLoop, 400);
+      })
+      .fail(function (xhr) {
+        secBusy = false;
+        $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+        var msg = 'خطای ارتباط';
+        if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+          msg = xhr.responseJSON.data.message;
+        }
+        notice($('#mvn-sec-result'), msg, false);
+      });
+  }
+
+  $('#mvn-sec-preflight').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    notice($('#mvn-sec-result'), 'در حال بررسی پیش‌نیاز…', true);
+    post('mvn_security_preflight', {}, { timeout: 120000 })
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (res && res.success && res.data) {
+          renderPreflight(res.data.preflight);
+          notice($('#mvn-sec-result'), res.data.message || '', !!res.data.preflight.ok);
+        } else {
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+        }
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
+  });
+
+  $('#mvn-sec-migrate').on('click', function () {
+    var msg = $(this).data('confirm') || MVN.i18n.confirm;
+    if (!window.confirm(msg)) return;
+    if (secBusy) return;
+    secBusy = true;
+    $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', true);
+    $('#mvn-sec-progress-wrap').show();
+    $('#mvn-sec-progress-bar').css('width', '2%');
+    $('#mvn-sec-progress-label').text('شروع مهاجرت…');
+    post('mvn_security_migrate_start', { confirm: 'migrate' }, { timeout: 120000 })
+      .done(function (res) {
+        if (!res || !res.success) {
+          secBusy = false;
+          $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+          if (res && res.data && res.data.preflight) {
+            renderPreflight(res.data.preflight);
+          }
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+          return;
+        }
+        notice($('#mvn-sec-result'), res.data.message || 'شروع شد', true);
+        secTickLoop();
+      })
+      .fail(function () {
+        secBusy = false;
+        $('#mvn-sec-migrate, #mvn-sec-preflight').prop('disabled', false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
+  });
+
+  $('#mvn-sec-rollback').on('click', function () {
+    var msg = $(this).data('confirm') || MVN.i18n.confirm;
+    if (!window.confirm(msg)) return;
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_security_rollback', { confirm: 'rollback' }, { timeout: 300000 })
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (res && res.success) {
+          notice($('#mvn-sec-result'), res.data.message || 'بازگشت انجام شد', true);
+          window.setTimeout(function () {
+            location.reload();
+          }, 1000);
+        } else {
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+        }
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
+  });
+
+  $('#mvn-sec-reverify').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    post('mvn_security_reverify', {}, { timeout: 120000 })
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (res && res.success) {
+          notice($('#mvn-sec-result'), 'تأیید سلامت انجام شد', true);
+          window.setTimeout(function () {
+            location.reload();
+          }, 800);
+        } else {
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+        }
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
   });
 })(jQuery);

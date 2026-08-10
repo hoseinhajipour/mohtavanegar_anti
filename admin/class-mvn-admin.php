@@ -70,6 +70,11 @@ class MVN_Admin {
 			'mvn_perms_start',
 			'mvn_perms_tick',
 			'mvn_hardening_save',
+			'mvn_security_preflight',
+			'mvn_security_migrate_start',
+			'mvn_security_migrate_tick',
+			'mvn_security_rollback',
+			'mvn_security_reverify',
 			'mvn_http_guard_list',
 			'mvn_http_guard_block',
 			'mvn_http_guard_unblock',
@@ -107,6 +112,7 @@ class MVN_Admin {
 		add_submenu_page( 'mvn-antivirus', 'Cron Monitor', 'Cron Monitor', 'mvn_scan', 'mvn-cron', array( $this, 'page_cron' ) );
 		add_submenu_page( 'mvn-antivirus', 'تعمیر هسته (Repair)', 'تعمیر هسته', 'mvn_remediate', 'mvn-repair', array( $this, 'page_repair' ) );
 		add_submenu_page( 'mvn-antivirus', 'سخت‌سازی', 'سخت‌سازی', 'mvn_configure', 'mvn-hardening', array( $this, 'page_hardening' ) );
+		add_submenu_page( 'mvn-antivirus', 'معماری امنیتی', 'معماری امنیتی', 'mvn_configure', 'mvn-security-arch', array( $this, 'page_security_arch' ) );
 		add_submenu_page( 'mvn-antivirus', 'قرنطینه', 'قرنطینه', 'mvn_remediate', 'mvn-quarantine', array( $this, 'page_quarantine' ) );
 		add_submenu_page( 'mvn-antivirus', 'سرعت لود', 'سرعت لود', 'mvn_configure', 'mvn-perf', array( $this, 'page_perf' ) );
 	}
@@ -307,6 +313,18 @@ class MVN_Admin {
 			array(
 				'settings'   => MVN_Hardening::instance()->settings(),
 				'http_guard' => MVN_Http_Guard::admin_payload(),
+				'cloak'      => MVN_Cloak::instance()->settings(),
+				'cloak_urls' => MVN_Cloak::instance()->public_urls(),
+			)
+		);
+	}
+
+	public function page_security_arch() {
+		$this->render(
+			'security-architecture',
+			array(
+				'payload'          => MVN_Security_Migration::admin_payload(),
+				'preflight_result' => null,
 			)
 		);
 	}
@@ -340,7 +358,7 @@ class MVN_Admin {
 
 	private function guard() {
 		$action = isset( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
-		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
+		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_security_preflight', 'mvn_security_migrate_start', 'mvn_security_migrate_tick', 'mvn_security_rollback', 'mvn_security_reverify', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
 		$scan_only = array( 'mvn_scan_start', 'mvn_scan_tick', 'mvn_scan_status', 'mvn_scan_pause', 'mvn_scan_resume', 'mvn_scan_stop', 'mvn_core_integrity_start', 'mvn_core_integrity_tick', 'mvn_as_scan_start', 'mvn_as_scan_tick', 'mvn_fix_preview' );
 		$cap = in_array( $action, $configure, true ) ? 'mvn_configure' : ( in_array( $action, $scan_only, true ) ? 'mvn_scan' : 'mvn_remediate' );
 		if ( ! current_user_can( $cap ) ) {
@@ -948,17 +966,115 @@ class MVN_Admin {
 		$path_block = ! empty( $_POST['path_blocker_enabled'] );
 		MVN_Path_Blocker::set_enabled( $path_block );
 		$block_status = $path_block ? MVN_Path_Blocker::enforce() : array();
+
+		$cloak_raw = isset( $_POST['cloak'] ) ? wp_unslash( $_POST['cloak'] ) : array(); // phpcs:ignore
+		if ( ! is_array( $cloak_raw ) ) {
+			$cloak_raw = array();
+		}
+		$cloak_saved = MVN_Cloak::instance()->save( $cloak_raw );
+		$purge       = array();
+		if ( ! empty( $cloak_saved['remove_meta_files'] ) ) {
+			$purge = MVN_Cloak::purge_fingerprint_files();
+		}
+
+		$msg = 'تنظیمات ذخیره شد.'
+			. ( $sched ? ' اسکن پس‌زمینه فعال شد.' : ' اسکن پس‌زمینه خاموش است.' )
+			. ( $path_block ? ' بلاکر cache/db.php فعال است.' : ' بلاکر مسیرها خاموش شد.' );
+		if ( ! empty( $cloak_saved['enabled'] ) ) {
+			$urls = MVN_Cloak::instance()->public_urls();
+			$msg .= ' مخفی‌سازی فعال — ورود: ' . $urls['login_url'];
+		}
+		if ( ! empty( $purge['removed'] ) ) {
+			$msg .= ' فایل‌های اثرانگشت حذف شد: ' . implode( ', ', $purge['removed'] ) . '.';
+		}
+
 		wp_send_json_success(
 			array(
-				'message'    => 'تنظیمات ذخیره شد.'
-					. ( $sched ? ' اسکن پس‌زمینه فعال شد.' : ' اسکن پس‌زمینه خاموش است.' )
-					. ( $path_block ? ' بلاکر cache/db.php فعال است.' : ' بلاکر مسیرها خاموش شد.' ),
+				'message'    => $msg,
 				'settings'   => $saved,
 				'schedule'   => MVN_Scheduler::status(),
 				'path_block' => $block_status,
 				'http_guard' => MVN_Http_Guard::admin_payload(),
+				'cloak'      => $cloak_saved,
+				'cloak_urls' => MVN_Cloak::instance()->public_urls(),
+				'purge'      => $purge,
 			)
 		);
+	}
+
+	public function ajax_security_preflight() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$result = MVN_Security_Validator::preflight();
+		wp_send_json_success(
+			array(
+				'preflight' => $result,
+				'payload'   => MVN_Security_Migration::admin_payload(),
+				'message'   => ! empty( $result['ok'] ) ? 'همه پیش‌نیازهای بحرانی برقرار است.' : 'برخی پیش‌نیازها برقرار نیستند؛ مهاجرت انجام نمی‌شود.',
+			)
+		);
+	}
+
+	public function ajax_security_migrate_start() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$confirm = isset( $_POST['confirm'] ) ? sanitize_text_field( wp_unslash( $_POST['confirm'] ) ) : '';
+		if ( 'migrate' !== $confirm ) {
+			wp_send_json_error( array( 'message' => 'تأیید مهاجرت ارسال نشده است.' ), 400 );
+		}
+		$started = MVN_Security_Migration::start();
+		if ( is_wp_error( $started ) ) {
+			$data = array( 'message' => $started->get_error_message() );
+			$err_data = $started->get_error_data();
+			if ( is_array( $err_data ) ) {
+				$data['preflight'] = $err_data;
+			}
+			wp_send_json_error( $data );
+		}
+		wp_send_json_success( $started );
+	}
+
+	public function ajax_security_migrate_tick() {
+		$this->guard();
+		@set_time_limit( 180 );
+		$result = MVN_Security_Migration::tick();
+		if ( is_wp_error( $result ) ) {
+			$payload = array(
+				'message' => $result->get_error_message(),
+				'payload' => MVN_Security_Migration::admin_payload(),
+			);
+			$err_data = $result->get_error_data();
+			if ( is_array( $err_data ) && isset( $err_data['state'] ) ) {
+				$payload['state'] = $err_data['state'];
+			}
+			wp_send_json_error( $payload );
+		}
+		$result['payload'] = MVN_Security_Migration::admin_payload();
+		wp_send_json_success( $result );
+	}
+
+	public function ajax_security_rollback() {
+		$this->guard();
+		@set_time_limit( 300 );
+		$confirm = isset( $_POST['confirm'] ) ? sanitize_text_field( wp_unslash( $_POST['confirm'] ) ) : '';
+		if ( 'rollback' !== $confirm ) {
+			wp_send_json_error( array( 'message' => 'تأیید بازگشت ارسال نشده است.' ), 400 );
+		}
+		$result = MVN_Security_Migration::rollback();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( $result );
+	}
+
+	public function ajax_security_reverify() {
+		$this->guard();
+		@set_time_limit( 120 );
+		$result = MVN_Security_Migration::reverify();
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+		}
+		wp_send_json_success( $result );
 	}
 
 	public function ajax_http_guard_list() {

@@ -137,6 +137,88 @@ $s = $settings;
 			</tr>
 		</table>
 
+		<?php
+		$c     = isset( $cloak ) && is_array( $cloak ) ? $cloak : MVN_Cloak::defaults();
+		$curls = isset( $cloak_urls ) && is_array( $cloak_urls ) ? $cloak_urls : array();
+		?>
+		<hr style="margin:24px 0">
+		<h2>مخفی‌سازی وردپرس از ربات‌ها</h2>
+		<p>
+			مسیر ورود و پیشخوان را از نام‌های شناخته‌شده (<code>wp-login.php</code> / <code>wp-admin</code>) جدا می‌کند،
+			فایل‌های اثرانگشت نصب سریع را پاک می‌کند و نشانه‌های رایج شناسایی وردپرس را کم می‌کند.
+		</p>
+		<?php if ( ! empty( $curls['enabled'] ) ) : ?>
+			<div class="mvn-notice mvn-notice-ok">
+				<strong>آدرس ورود مخفی:</strong>
+				<code dir="ltr"><?php echo esc_html( isset( $curls['login_url'] ) ? $curls['login_url'] : '' ); ?></code>
+				<?php if ( ! empty( $curls['admin_slug'] ) ) : ?>
+					<br><strong>آدرس پیشخوان مخفی:</strong>
+					<code dir="ltr"><?php echo esc_html( isset( $curls['admin_url'] ) ? $curls['admin_url'] : '' ); ?></code>
+				<?php endif; ?>
+				<br><span class="mvn-muted">این آدرس را در جای امن نگه دارید؛ بعد از فعال‌سازی <code>wp-login.php</code> برای ربات‌ها ۴۰۴ برمی‌گرداند.</span>
+			</div>
+		<?php endif; ?>
+
+		<table class="form-table mvn-form-table">
+			<tr>
+				<th>فعال‌سازی مخفی‌سازی</th>
+				<td>
+					<label><input type="checkbox" name="cloak[enabled]" value="1" <?php checked( ! empty( $c['enabled'] ) ); ?>>
+					تغییر مسیر ورود و پنهان‌سازی اثرانگشت وردپرس</label>
+				</td>
+			</tr>
+			<tr>
+				<th>اسلاگ صفحه ورود</th>
+				<td>
+					<input type="text" name="cloak[login_slug]" value="<?php echo esc_attr( isset( $c['login_slug'] ) ? $c['login_slug'] : 'mvn-access' ); ?>" class="regular-text" dir="ltr" pattern="[a-z0-9\-_]+" maxlength="40" placeholder="mvn-access">
+					<p class="description">فقط حروف انگلیسی کوچک، عدد، خط تیره. مثال: <code>portal</code> → آدرس ورود می‌شود <code dir="ltr">/portal/</code></p>
+				</td>
+			</tr>
+			<tr>
+				<th>اسلاگ پیشخوان (اختیاری)</th>
+				<td>
+					<input type="text" name="cloak[admin_slug]" value="<?php echo esc_attr( isset( $c['admin_slug'] ) ? $c['admin_slug'] : '' ); ?>" class="regular-text" dir="ltr" pattern="[a-z0-9\-_]*" maxlength="40" placeholder="مثلاً console">
+					<p class="description">خالی = پوشه فیزیکی <code>wp-admin</code> عوض نمی‌شود (فقط از مهمان‌ها مخفی می‌شود). پر کردن اسلاگ، لینک‌های پیشخوان را هم عوض می‌کند.</p>
+				</td>
+			</tr>
+			<tr>
+				<th>مخفی کردن wp-admin</th>
+				<td>
+					<label><input type="checkbox" name="cloak[hide_wp_admin]" value="1" <?php checked( ! empty( $c['hide_wp_admin'] ) ); ?>>
+					درخواست مهمان به <code>/wp-admin/</code> با خطای ۴۰۴ پاسخ داده شود (به‌جای هدایت به صفحه ورود)</label>
+				</td>
+			</tr>
+			<tr>
+				<th>حذف فایل‌های اثرانگشت</th>
+				<td>
+					<label><input type="checkbox" name="cloak[remove_meta_files]" value="1" <?php checked( ! empty( $c['remove_meta_files'] ) ); ?>>
+					حذف <code>readme.html</code>، <code>license.txt</code> و <code>wp-config-sample.php</code> از ریشه سایت</label>
+					<p class="description">بعد از آپدیت هسته ممکن است برگردند؛ افزونه دوباره پاکشان می‌کند.</p>
+				</td>
+			</tr>
+			<tr>
+				<th>مسدودسازی URL اثرانگشت</th>
+				<td>
+					<label><input type="checkbox" name="cloak[block_fingerprint_files]" value="1" <?php checked( ! empty( $c['block_fingerprint_files'] ) ); ?>>
+					درخواست به همان فایل‌ها همیشه ۴۰۴ باشد</label>
+				</td>
+			</tr>
+			<tr>
+				<th>حذف Emoji وردپرس</th>
+				<td>
+					<label><input type="checkbox" name="cloak[disable_emoji]" value="1" <?php checked( ! empty( $c['disable_emoji'] ) ); ?>>
+					حذف اسکریپت/استایل emoji که یکی از نشانه‌های رایج شناسایی وردپرس است</label>
+				</td>
+			</tr>
+			<tr>
+				<th>پاکسازی generator / هدر</th>
+				<td>
+					<label><input type="checkbox" name="cloak[strip_meta_generator]" value="1" <?php checked( ! empty( $c['strip_meta_generator'] ) ); ?>>
+					حذف generator و کاهش نویز شناسایی در head / هدرها</label>
+				</td>
+			</tr>
+		</table>
+
 		<p>
 			<button type="submit" class="button button-primary button-hero">ذخیره تنظیمات</button>
 			<span id="mvn-hardening-result" style="margin-right:12px"></span>

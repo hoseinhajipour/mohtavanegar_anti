@@ -1,11 +1,129 @@
-# BEGIN WordPress
+# BEGIN Mohtavanegar Hardened Defaults
+# Default root .htaccess — security-first for Apache / cPanel / LiteSpeed.
+# Restored by Mohtavanegar Antivirus (Htaccess Guard).
+#
+# Policy:
+# 1) Only Google + major AI crawlers may crawl the public site.
+# 2) NO crawler may access /wp-admin/, wp-login.php, or xmlrpc.php.
+# 3) Sensitive files, scanners, and common exploit probes are denied.
 
+Options -Indexes -ExecCGI
+<IfModule mod_negotiation.c>
+	Options -MultiViews
+</IfModule>
+
+# Hide server signature when allowed
+<IfModule mod_headers.c>
+	Header unset X-Powered-By
+	Header always unset X-Powered-By
+	Header set X-Content-Type-Options "nosniff"
+	Header set X-Frame-Options "SAMEORIGIN"
+	Header set Referrer-Policy "strict-origin-when-cross-origin"
+	Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+	Header set Cross-Origin-Resource-Policy "same-origin"
+	Header set Cross-Origin-Opener-Policy "same-origin-allow-popups"
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# Sensitive files — never downloadable
+# ---------------------------------------------------------------------------
+<FilesMatch "(?i)^(\.env|\.htaccess|\.htpasswd|\.user\.ini|wp-config\.php|wp-config\.php\.bak|composer\.json|composer\.lock|package\.json|package-lock\.json|phpunit\.xml|phpunit\.xml\.dist)$">
+	<IfModule mod_authz_core.c>
+		Require all denied
+	</IfModule>
+	<IfModule !mod_authz_core.c>
+		Order allow,deny
+		Deny from all
+	</IfModule>
+</FilesMatch>
+
+<FilesMatch "(?i)\.(env|sql|bak|old|orig|save|swp|log|tar|gz|tgz|zip|rar|7z|dist|inc|sh|bash|py|rb|pl)$">
+	<IfModule mod_authz_core.c>
+		Require all denied
+	</IfModule>
+	<IfModule !mod_authz_core.c>
+		Order allow,deny
+		Deny from all
+	</IfModule>
+</FilesMatch>
+
+<IfModule mod_authz_core.c>
+	<FilesMatch "(?i)^(readme\.html|license\.txt|licens\.txt|wp-config-sample\.php)$">
+		Require all denied
+	</FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+	<FilesMatch "(?i)^(readme\.html|license\.txt|licens\.txt|wp-config-sample\.php)$">
+		Order allow,deny
+		Deny from all
+	</FilesMatch>
+</IfModule>
+
+# Block VCS / dot-paths
+RedirectMatch 404 (?i)/\.(?:git|svn|hg|env)(?:/|$)
+
+<IfModule mod_rewrite.c>
 RewriteEngine On
-RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 RewriteBase /
+
+# Block TRACE / TRACK
+RewriteCond %{REQUEST_METHOD} ^(TRACE|TRACK)$ [NC]
+RewriteRule .* - [F,L]
+
+# ---------------------------------------------------------------------------
+# wp-admin / login / xmlrpc — ZERO crawler access (including Google & AI)
+# ---------------------------------------------------------------------------
+RewriteCond %{REQUEST_URI} (wp-admin|wp-login\.php|xmlrpc\.php|wp-register\.php) [NC]
+RewriteCond %{HTTP_USER_AGENT} (bot|crawl|spider|slurp|archiver|fetcher|scrapy|python-requests|httpclient|wget|curl|libwww|go-http|java/|php/|scanner|nikto|sqlmap|nmap|masscan|zgrab|semrush|ahrefs|mj12bot|dotbot|petalbot|yandex|baiduspider|duckduckbot|bingbot|facebookexternalhit|twitterbot|linkedinbot|embedly|outbrain|pinterest|redditbot|applebot|ia_archiver|archive\.org|gptbot|claude|anthropic|perplexity|bytespider|ccbot|amazonbot|googlebot|google\-|adsbot) [NC]
+RewriteRule .* - [F,L]
+
+# Empty / missing User-Agent on sensitive WordPress endpoints
+RewriteCond %{REQUEST_URI} (wp-admin|wp-login\.php|xmlrpc\.php) [NC]
+RewriteCond %{HTTP_USER_AGENT} ^-?$
+RewriteRule .* - [F,L]
+
+# Always forbid xmlrpc.php at the edge (common brute-force / amplification vector)
+RewriteRule ^xmlrpc\.php$ - [F,L]
+
+# ---------------------------------------------------------------------------
+# Site crawl policy — allow ONLY Google + AI crawlers; forbid other bots
+# Allowed (examples): Googlebot, AdsBot-Google, Google-Extended, GPTBot,
+# ChatGPT-User, OAI-SearchBot, ClaudeBot, anthropic, PerplexityBot,
+# Bytespider, CCBot, Amazonbot, Cohere, Diffbot, Meta-ExternalAgent
+# ---------------------------------------------------------------------------
+RewriteCond %{HTTP_USER_AGENT} (bot|crawl|spider|slurp|archiver|scrapy|semrush|ahrefs|mj12bot|dotbot|petalbot|yandex|baiduspider|duckduckbot|bingbot|sogou|exabot|facebot|ia_archiver|archive\.org_bot|seznambot|zoominfobot|dataforseobot|linkpadbot|blexbot|sistrix|majestic|rogerbot|timpibot|gptbot|claude|anthropic|perplexity|bytespider|ccbot|amazonbot|cohere|diffbot) [NC]
+RewriteCond %{HTTP_USER_AGENT} !(googlebot|google\-inspection|googleother|adsbot\-google|apis\-google|mediapartners\-google|feedfetcher\-google|google\-extended|storebot\-google|google\-safety|gptbot|chatgpt\-user|oai\-searchbot|claudebot|claude\-web|anthropic|perplexitybot|bytespider|ccbot|amazonbot|cohere\-ai|diffbot|meta\-externalagent|meta\-externalfetcher) [NC]
+RewriteRule .* - [F,L]
+
+# Block notorious attack tools / scanners everywhere
+RewriteCond %{HTTP_USER_AGENT} (nikto|sqlmap|nmap|masscan|zgrab|wpscan|acunetix|nessus|openvas|havij|dirbuster|gobuster|wfuzz|nuclei|httpx|fuzz) [NC]
+RewriteRule .* - [F,L]
+
+# Block user-enumeration probes
+RewriteCond %{QUERY_STRING} (^|&)author=([0-9]+) [NC]
+RewriteRule .* - [F,L]
+
+# Block common PHP exploit query patterns
+RewriteCond %{QUERY_STRING} (<|%3C).*script.*(>|%3E) [NC,OR]
+RewriteCond %{QUERY_STRING} GLOBALS(=|\[|\%[0-9A-Z]{0,2}) [OR]
+RewriteCond %{QUERY_STRING} _REQUEST(=|\[|\%[0-9A-Z]{0,2})
+RewriteRule .* - [F,L]
+
+# Block path traversal in request URI
+RewriteCond %{REQUEST_URI} (\.\./|\.\.\\) [OR]
+RewriteCond %{QUERY_STRING} (\.\./|\.\.\\)
+RewriteRule .* - [F,L]
+
+# ---------------------------------------------------------------------------
+# WordPress permalinks
+# ---------------------------------------------------------------------------
+# BEGIN WordPress
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 RewriteRule ^index\.php$ - [L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
-
 # END WordPress
+
+</IfModule>
+# END Mohtavanegar Hardened Defaults
