@@ -22,6 +22,8 @@ class MVN_Security_Migration {
 	const COPY_CHUNK   = 80;
 	const LIST_DIR_CHUNK = 35;
 	const TICK_SECONDS = 10;
+	/** Files larger than this are copied alone in a tick (bytes). */
+	const LARGE_FILE_BYTES = 8388608; // 8 MiB
 	const BUSY_STATUSES = array( 'preflight', 'backup', 'listing', 'copying', 'verifying', 'switching', 'testing', 'cleanup', 'rollback' );
 
 	/**
@@ -637,15 +639,19 @@ class MVN_Security_Migration {
 			$list_byte = (int) ftell( $fh );
 		}
 
-		$copied = 0;
+		$copied   = 0;
+		$deferred = false;
 		while ( $copied < self::COPY_CHUNK && time() < $deadline && ! feof( $fh ) ) {
-			$line = fgets( $fh );
+			$line_pos = (int) ftell( $fh );
+			$line     = fgets( $fh );
 			if ( false === $line ) {
 				break;
 			}
-			$rel = trim( $line );
+			// Keep UTF-8 filenames intact; only strip ASCII CR/LF/space.
+			$rel = trim( $line, " \t\r\n\0\x0B" );
 			$offset++;
-			if ( '' === $rel || false !== strpos( $rel, '..' ) ) {
+			$list_byte = (int) ftell( $fh );
+			if ( '' === $rel || false !== strpos( $rel, '..' ) || false !== strpos( $rel, "\0" ) ) {
 				continue;
 			}
 			$src = $public . '/' . $rel;
@@ -654,19 +660,39 @@ class MVN_Security_Migration {
 				$copied++;
 				continue;
 			}
+
+			$size = is_file( $src ) ? (int) @filesize( $src ) : 0;
+			// Large media (e.g. Persian-named MP4) must not share a tick with dozens of other files.
+			if ( $size >= self::LARGE_FILE_BYTES && $copied > 0 ) {
+				$offset--;
+				$list_byte = $line_pos;
+				fseek( $fh, $line_pos );
+				$deferred = true;
+				break;
+			}
+			if ( $size >= self::LARGE_FILE_BYTES && function_exists( 'set_time_limit' ) ) {
+				@set_time_limit( max( 120, (int) ceil( $size / 1048576 ) + 60 ) );
+			}
+
 			$dir = dirname( $dst );
 			if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
 				fclose( $fh );
 				return self::fail( $state, $logger, 'ساخت پوشه ناموفق: ' . $rel, true );
 			}
-			if ( ! @copy( $src, $dst ) ) {
+
+			$result = self::copy_one_file( $src, $dst );
+			if ( true !== $result ) {
 				fclose( $fh );
-				return self::fail( $state, $logger, 'کپی ناموفق: ' . $rel, true );
+				$detail = is_string( $result ) && '' !== $result ? ( ' — ' . $result ) : '';
+				return self::fail( $state, $logger, 'کپی ناموفق: ' . $rel . $detail, true );
 			}
 			$copied++;
+			if ( $size >= self::LARGE_FILE_BYTES ) {
+				break;
+			}
 		}
-		$new_byte = ftell( $fh );
-		$eof      = feof( $fh );
+		$new_byte = (int) $list_byte;
+		$eof      = $deferred ? false : feof( $fh );
 		fclose( $fh );
 
 		$state['copy_offset'] = $offset;
@@ -1176,6 +1202,152 @@ class MVN_Security_Migration {
 		}
 		fclose( $fh );
 		return $out;
+	}
+
+	/**
+	 * Copy one filesystem entry into the relocated core.
+	 *
+	 * Prefer hardlink on the same filesystem (instant, safe for large UTF-8 media),
+	 * then PHP copy(), then a streamed fallback. Symlinks are recreated.
+	 *
+	 * @param string $src Absolute source.
+	 * @param string $dst Absolute destination.
+	 * @return true|string True on success, or an error detail string.
+	 */
+	private static function copy_one_file( $src, $dst ) {
+		clearstatcache( true, $src );
+		clearstatcache( true, $dst );
+
+		if ( is_link( $src ) ) {
+			$target = @readlink( $src );
+			if ( false === $target ) {
+				return self::last_fs_error( 'readlink failed' );
+			}
+			if ( file_exists( $dst ) || is_link( $dst ) ) {
+				if ( is_link( $dst ) && @readlink( $dst ) === $target ) {
+					return true;
+				}
+				if ( is_dir( $dst ) && ! is_link( $dst ) ) {
+					return 'destination is a directory';
+				}
+				@unlink( $dst );
+			}
+			if ( @symlink( $target, $dst ) ) {
+				return true;
+			}
+			return self::last_fs_error( 'symlink failed' );
+		}
+
+		if ( ! is_file( $src ) ) {
+			return 'source missing';
+		}
+		if ( ! is_readable( $src ) ) {
+			return 'source unreadable';
+		}
+
+		if ( file_exists( $dst ) || is_link( $dst ) ) {
+			$src_ino = @fileinode( $src );
+			$dst_ino = @fileinode( $dst );
+			if ( $src_ino && $dst_ino && (int) $src_ino === (int) $dst_ino ) {
+				return true;
+			}
+			$src_size = (int) @filesize( $src );
+			$dst_size = is_file( $dst ) ? (int) @filesize( $dst ) : -1;
+			if ( is_file( $dst ) && $src_size === $dst_size && $src_size >= 0 ) {
+				return true;
+			}
+			if ( is_dir( $dst ) && ! is_link( $dst ) ) {
+				return 'destination is a directory';
+			}
+			@unlink( $dst );
+		}
+
+		// Same-volume hardlink: avoids full byte copy of large videos with Unicode names.
+		if ( @link( $src, $dst ) ) {
+			return true;
+		}
+
+		if ( @copy( $src, $dst ) ) {
+			return true;
+		}
+		$copy_err = self::last_fs_error( '' );
+
+		if ( self::stream_copy_file( $src, $dst ) ) {
+			return true;
+		}
+		$stream_err = self::last_fs_error( 'stream copy failed' );
+
+		$parts = array_filter( array( $copy_err, $stream_err ) );
+		return $parts ? implode( '; ', $parts ) : 'copy failed';
+	}
+
+	/**
+	 * Stream-copy a regular file (handles large binaries when copy() fails).
+	 *
+	 * @param string $src Source path.
+	 * @param string $dst Destination path.
+	 * @return bool
+	 */
+	private static function stream_copy_file( $src, $dst ) {
+		$in = @fopen( $src, 'rb' );
+		if ( false === $in ) {
+			return false;
+		}
+		$tmp = $dst . '.mvn-partial';
+		if ( is_file( $tmp ) || is_link( $tmp ) ) {
+			@unlink( $tmp );
+		}
+		$out = @fopen( $tmp, 'wb' );
+		if ( false === $out ) {
+			fclose( $in );
+			return false;
+		}
+
+		$ok = false !== @stream_copy_to_stream( $in, $out );
+		if ( $ok && function_exists( 'fflush' ) ) {
+			@fflush( $out );
+		}
+		fclose( $in );
+		fclose( $out );
+
+		if ( ! $ok ) {
+			@unlink( $tmp );
+			return false;
+		}
+
+		$src_size = (int) @filesize( $src );
+		$tmp_size = (int) @filesize( $tmp );
+		if ( $src_size !== $tmp_size ) {
+			@unlink( $tmp );
+			return false;
+		}
+
+		if ( file_exists( $dst ) || is_link( $dst ) ) {
+			@unlink( $dst );
+		}
+		if ( ! @rename( $tmp, $dst ) ) {
+			$copied = @copy( $tmp, $dst );
+			@unlink( $tmp );
+			return (bool) $copied;
+		}
+		return true;
+	}
+
+	/**
+	 * @param string $fallback Fallback message.
+	 * @return string
+	 */
+	private static function last_fs_error( $fallback ) {
+		$err = error_get_last();
+		if ( is_array( $err ) && ! empty( $err['message'] ) ) {
+			$msg = (string) $err['message'];
+			// Keep message short for UI.
+			if ( strlen( $msg ) > 180 ) {
+				$msg = substr( $msg, 0, 177 ) . '...';
+			}
+			return $msg;
+		}
+		return (string) $fallback;
 	}
 
 	/**
