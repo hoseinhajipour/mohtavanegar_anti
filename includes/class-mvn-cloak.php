@@ -389,7 +389,10 @@ class MVN_Cloak {
 	public function filter_site_url( $url, $path = '', $scheme = null, $blog_id = null ) {
 		unset( $scheme, $blog_id );
 		$s = $this->settings();
-		if ( empty( $s['enabled'] ) || $this->doing_login ) {
+		// Always rewrite while cloak is on — including while serving the custom
+		// login page. Skipping during $this->doing_login left the form action on
+		// wp-login.php, which block_default_login() then 404s on submit.
+		if ( empty( $s['enabled'] ) ) {
 			return $url;
 		}
 		if ( is_string( $path ) && false !== strpos( $path, 'wp-login.php' ) ) {

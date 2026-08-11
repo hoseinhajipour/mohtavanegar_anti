@@ -524,9 +524,13 @@ class MVN_Security_Validator {
 
 	/**
 	 * @param string $path Path.
-	 * @return int|false
+	 * @return int|false Bytes free, or false when unknown / function disabled.
 	 */
 	public static function disk_free_bytes( $path ) {
+		// Shared hosts often put disk_free_space in disable_functions; calling it fatals on PHP 8+.
+		if ( ! function_exists( 'disk_free_space' ) || ! is_string( $path ) || '' === $path ) {
+			return false;
+		}
 		$free = @disk_free_space( $path );
 		return false === $free ? false : (int) $free;
 	}
