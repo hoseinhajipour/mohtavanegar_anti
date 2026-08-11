@@ -62,12 +62,21 @@ $preflight = isset( $preflight_result ) && is_array( $preflight_result ) ? $pref
 
 		<div class="mvn-actions" style="gap:8px;flex-wrap:wrap">
 			<button type="button" class="button" id="mvn-sec-reverify">اجرای مجدد تأیید سلامت</button>
+			<button type="button" class="button" id="mvn-sec-repair-uploads"
+				title="chmod 0644 روی فایل‌های uploads — رفع 403 بندانگشتی در Media Library">
+				تعمیر دسترسی رسانه (uploads)
+			</button>
 			<button type="button" class="button button-link-delete" id="mvn-sec-rollback"
 				data-confirm="بازگشت به معماری قبلی انجام شود؟ سایت موقتاً در حالت نگهداری قرار می‌گیرد.">
 				بازگردانی معماری امنیتی وردپرس
 			</button>
 			<span id="mvn-sec-result"></span>
 		</div>
+		<p class="description" style="margin-top:8px">
+			اگر بعد از مهاجرت تصویر در کتابخانه رسانه / تصویر شاخص دیده نمی‌شود ولی لینک اصلی فایل باز می‌شود،
+			معمولاً سایزهای بندانگشتی با دسترسی <code>0600</code> ساخته شده‌اند و LiteSpeed آن‌ها را با HTTP 403 رد می‌کند.
+			دکمه «تعمیر دسترسی رسانه» را بزنید.
+		</p>
 	<?php else : ?>
 		<div class="mvn-grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
 			<div>

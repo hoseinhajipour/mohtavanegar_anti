@@ -129,6 +129,191 @@ class MVN_Security_Migration {
 	}
 
 	/**
+	 * Keep newly generated media files web-readable after gateway relocation.
+	 *
+	 * LiteSpeed (and some Apache setups) refuse to serve 0600 files outside the
+	 * document root via symlink — originals often get chmod'd by WordPress upload
+	 * handlers, but image intermediate sizes do not, so the Media Library /
+	 * featured-image modal shows blank thumbnails while the full URL still works.
+	 */
+	public static function boot() {
+		static $booted = false;
+		if ( $booted ) {
+			return;
+		}
+		$booted = true;
+		add_filter( 'wp_handle_upload', array( __CLASS__, 'filter_handle_upload_perms' ), 99 );
+		add_filter( 'wp_generate_attachment_metadata', array( __CLASS__, 'filter_attachment_metadata_perms' ), 99, 2 );
+	}
+
+	/**
+	 * @param array $upload Upload result from wp_handle_upload.
+	 * @return array
+	 */
+	public static function filter_handle_upload_perms( $upload ) {
+		if ( ! self::is_completed() || ! is_array( $upload ) || empty( $upload['file'] ) ) {
+			return $upload;
+		}
+		self::ensure_web_readable_file( (string) $upload['file'] );
+		return $upload;
+	}
+
+	/**
+	 * @param array $metadata      Attachment metadata.
+	 * @param int   $attachment_id Attachment ID.
+	 * @return array
+	 */
+	public static function filter_attachment_metadata_perms( $metadata, $attachment_id = 0 ) {
+		if ( ! self::is_completed() || ! is_array( $metadata ) ) {
+			return $metadata;
+		}
+		self::chmod_attachment_files( (int) $attachment_id, $metadata );
+		return $metadata;
+	}
+
+	/**
+	 * Make a single file readable by the web server (0644).
+	 *
+	 * @param string $path Absolute path.
+	 * @return bool
+	 */
+	public static function ensure_web_readable_file( $path ) {
+		$path = (string) $path;
+		if ( '' === $path || ! is_file( $path ) ) {
+			return false;
+		}
+		$mode = @fileperms( $path );
+		$cur  = false === $mode ? 0 : ( $mode & 0777 );
+		// Already world-readable (and not world-writable).
+		if ( $cur && ( $cur & 0004 ) && ! ( $cur & 0002 ) ) {
+			return true;
+		}
+		return (bool) @chmod( $path, 0644 );
+	}
+
+	/**
+	 * @param int   $attachment_id Attachment ID.
+	 * @param array $metadata      Metadata (optional; loaded when empty).
+	 * @return int Number of files touched.
+	 */
+	public static function chmod_attachment_files( $attachment_id, $metadata = null ) {
+		$fixed = 0;
+		$file  = $attachment_id ? get_attached_file( $attachment_id ) : false;
+		if ( ! $file && is_array( $metadata ) && ! empty( $metadata['file'] ) ) {
+			$uploads = wp_upload_dir( null, false );
+			if ( ! empty( $uploads['basedir'] ) ) {
+				$file = trailingslashit( $uploads['basedir'] ) . ltrim( (string) $metadata['file'], '/' );
+			}
+		}
+		if ( ! $file || ! is_string( $file ) ) {
+			return 0;
+		}
+		if ( self::ensure_web_readable_file( $file ) ) {
+			$fixed++;
+		}
+		$dir = dirname( $file );
+		if ( ! is_array( $metadata ) ) {
+			$metadata = $attachment_id ? wp_get_attachment_metadata( $attachment_id ) : array();
+		}
+		if ( ! is_array( $metadata ) ) {
+			return $fixed;
+		}
+		if ( ! empty( $metadata['sizes'] ) && is_array( $metadata['sizes'] ) ) {
+			foreach ( $metadata['sizes'] as $size ) {
+				if ( empty( $size['file'] ) ) {
+					continue;
+				}
+				if ( self::ensure_web_readable_file( $dir . '/' . $size['file'] ) ) {
+					$fixed++;
+				}
+			}
+		}
+		if ( ! empty( $metadata['original_image'] ) ) {
+			if ( self::ensure_web_readable_file( $dir . '/' . $metadata['original_image'] ) ) {
+				$fixed++;
+			}
+		}
+		return $fixed;
+	}
+
+	/**
+	 * Normalize permissions under wp-content/uploads (files 0644, dirs 0755).
+	 *
+	 * @param int $max_files Safety cap.
+	 * @return array{ok:bool,files:int,dirs:int,fixed:int,errors:int,detail:string}
+	 */
+	public static function repair_uploads_permissions( $max_files = 80000 ) {
+		$uploads = wp_upload_dir( null, false );
+		$root    = ! empty( $uploads['basedir'] ) ? mvn_normalize_path( $uploads['basedir'] ) : '';
+		$out     = array(
+			'ok'     => false,
+			'files'  => 0,
+			'dirs'   => 0,
+			'fixed'  => 0,
+			'errors' => 0,
+			'detail' => '',
+		);
+		if ( '' === $root || ! is_dir( $root ) ) {
+			$out['detail'] = 'پوشه uploads در دسترس نیست.';
+			return $out;
+		}
+
+		@chmod( $root, 0755 );
+		$out['dirs']++;
+		$out['fixed']++;
+
+		try {
+			$iterator = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),
+				RecursiveIteratorIterator::SELF_FIRST
+			);
+		} catch ( Exception $e ) {
+			$out['detail'] = 'پیمایش uploads ناموفق بود.';
+			return $out;
+		}
+
+		foreach ( $iterator as $item ) {
+			/** @var SplFileInfo $item */
+			$path = $item->getPathname();
+			if ( $item->isDir() ) {
+				$out['dirs']++;
+				$mode = @fileperms( $path );
+				$cur  = false === $mode ? 0 : ( $mode & 0777 );
+				if ( 0755 !== $cur && ! @chmod( $path, 0755 ) ) {
+					$out['errors']++;
+				} else {
+					$out['fixed']++;
+				}
+				continue;
+			}
+			if ( ! $item->isFile() ) {
+				continue;
+			}
+			$out['files']++;
+			if ( $out['files'] > (int) $max_files ) {
+				$out['detail'] = 'سقف تعداد فایل رسید؛ باقی‌مانده را دوباره اجرا کنید.';
+				$out['ok']     = $out['errors'] === 0;
+				return $out;
+			}
+			if ( self::ensure_web_readable_file( $path ) ) {
+				$out['fixed']++;
+			} else {
+				$out['errors']++;
+			}
+		}
+
+		$out['ok']     = $out['errors'] === 0;
+		$out['detail'] = sprintf(
+			'فایل‌ها: %d — پوشه‌ها: %d — اصلاح‌شده: %d — خطا: %d',
+			$out['files'],
+			$out['dirs'],
+			$out['fixed'],
+			$out['errors']
+		);
+		return $out;
+	}
+
+	/**
 	 * Propose a collision-safe core directory beside the public root.
 	 *
 	 * @return array{path:string,name:string}
@@ -991,6 +1176,10 @@ class MVN_Security_Migration {
 
 		self::disable_maintenance( $state['public_path'], $state['core_path'] );
 
+		// LiteSpeed often 403s non-world-readable intermediate image sizes via symlink.
+		$perm = self::repair_uploads_permissions();
+		$logger->info( 'Uploads permissions normalized: ' . $perm['detail'] );
+
 		if ( ! empty( $state['lock_token'] ) ) {
 			mvn_job_lock_release( 'filesystem_mutation', $state['lock_token'] );
 		}
@@ -1268,11 +1457,13 @@ class MVN_Security_Migration {
 		}
 
 		if ( @copy( $src, $dst ) ) {
+			self::ensure_web_readable_file( $dst );
 			return true;
 		}
 		$copy_err = self::last_fs_error( '' );
 
 		if ( self::stream_copy_file( $src, $dst ) ) {
+			self::ensure_web_readable_file( $dst );
 			return true;
 		}
 		$stream_err = self::last_fs_error( 'stream copy failed' );

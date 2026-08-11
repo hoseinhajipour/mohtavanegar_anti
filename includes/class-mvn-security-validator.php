@@ -337,6 +337,15 @@ class MVN_Security_Validator {
 			false
 		);
 
+		$media = self::uploads_media_thumb_probe();
+		$out[] = self::test(
+			'uploads_media_thumbs',
+			'خوانایی تصویر بندانگشتی رسانه',
+			$media['ok'],
+			$media['detail'],
+			false
+		);
+
 		return $out;
 	}
 
@@ -405,6 +414,59 @@ class MVN_Security_Validator {
 			'ok'     => $ok,
 			'detail' => $executed ? 'PHP در uploads اجرا شد (خطرناک)' : 'HTTP ' . $code . ' — اجرا نشد',
 		);
+	}
+
+	/**
+	 * Probe a recent image thumbnail over HTTP.
+	 *
+	 * Catches LiteSpeed 403 on non-world-readable intermediate sizes after gateway migration.
+	 *
+	 * @return array{ok:bool,detail:string}
+	 */
+	private static function uploads_media_thumb_probe() {
+		$ids = get_posts(
+			array(
+				'post_type'              => 'attachment',
+				'post_status'            => 'inherit',
+				'post_mime_type'         => 'image',
+				'posts_per_page'         => 8,
+				'orderby'                => 'date',
+				'order'                  => 'DESC',
+				'fields'                 => 'ids',
+				'no_found_rows'          => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+		if ( empty( $ids ) ) {
+			return array( 'ok' => true, 'detail' => 'رسانه‌ای برای آزمون نبود — رد شد' );
+		}
+
+		foreach ( $ids as $id ) {
+			$url = wp_get_attachment_image_url( (int) $id, 'thumbnail' );
+			if ( ! $url ) {
+				continue;
+			}
+			$res  = self::http_probe( $url );
+			$code = (int) $res['code'];
+			if ( 403 === $code ) {
+				return array(
+					'ok'     => false,
+					'detail' => 'HTTP 403 روی بندانگشتی — سطح دسترسی فایل را به 0644 اصلاح کنید (' . $url . ')',
+				);
+			}
+			if ( $code >= 200 && $code < 400 ) {
+				return array(
+					'ok'     => true,
+					'detail' => 'HTTP ' . $code . ' — ' . $url,
+				);
+			}
+			if ( 0 === $code ) {
+				return array( 'ok' => true, 'detail' => 'ارتباط لوکال ناموفق (در هاست مشترک رایج است) — رد شد' );
+			}
+		}
+
+		return array( 'ok' => true, 'detail' => 'بندانگشتی قابل آزمون پیدا نشد — رد شد' );
 	}
 
 	/**

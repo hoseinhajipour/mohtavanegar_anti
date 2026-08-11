@@ -76,6 +76,7 @@ class MVN_Admin {
 			'mvn_security_migrate_abort',
 			'mvn_security_rollback',
 			'mvn_security_reverify',
+			'mvn_security_repair_uploads',
 			'mvn_http_guard_list',
 			'mvn_http_guard_block',
 			'mvn_http_guard_unblock',
@@ -359,7 +360,7 @@ class MVN_Admin {
 
 	private function guard() {
 		$action = isset( $_REQUEST['action'] ) ? sanitize_key( wp_unslash( $_REQUEST['action'] ) ) : '';
-		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_security_preflight', 'mvn_security_migrate_start', 'mvn_security_migrate_tick', 'mvn_security_migrate_abort', 'mvn_security_rollback', 'mvn_security_reverify', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
+		$configure = array( 'mvn_sig_pack_update', 'mvn_hardening_save', 'mvn_security_preflight', 'mvn_security_migrate_start', 'mvn_security_migrate_tick', 'mvn_security_migrate_abort', 'mvn_security_rollback', 'mvn_security_reverify', 'mvn_security_repair_uploads', 'mvn_http_guard_list', 'mvn_http_guard_block', 'mvn_http_guard_unblock', 'mvn_http_guard_add', 'mvn_http_guard_clear', 'mvn_perf_arm', 'mvn_perf_disarm', 'mvn_perf_optimize', 'mvn_perf_clear' );
 		$scan_only = array( 'mvn_scan_start', 'mvn_scan_tick', 'mvn_scan_status', 'mvn_scan_pause', 'mvn_scan_resume', 'mvn_scan_stop', 'mvn_core_integrity_start', 'mvn_core_integrity_tick', 'mvn_as_scan_start', 'mvn_as_scan_tick', 'mvn_fix_preview' );
 		$cap = in_array( $action, $configure, true ) ? 'mvn_configure' : ( in_array( $action, $scan_only, true ) ? 'mvn_scan' : 'mvn_remediate' );
 		if ( ! current_user_can( $cap ) ) {
@@ -1090,6 +1091,43 @@ class MVN_Admin {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
 		}
 		wp_send_json_success( $result );
+	}
+
+	public function ajax_security_repair_uploads() {
+		$this->guard();
+		@set_time_limit( 300 );
+		if ( ! MVN_Security_Migration::is_completed() ) {
+			wp_send_json_error( array( 'message' => 'Security Gateway فعال نیست.' ) );
+		}
+		$perm = MVN_Security_Migration::repair_uploads_permissions();
+		$ver  = MVN_Security_Migration::reverify();
+		if ( is_wp_error( $ver ) ) {
+			wp_send_json_success(
+				array(
+					'message' => 'دسترسی رسانه اصلاح شد، اما تأیید سلامت کامل نشد: ' . $ver->get_error_message(),
+					'repair'  => $perm,
+				)
+			);
+		}
+		$thumb_ok = true;
+		if ( ! empty( $ver['verification']['tests'] ) && is_array( $ver['verification']['tests'] ) ) {
+			foreach ( $ver['verification']['tests'] as $t ) {
+				if ( isset( $t['id'] ) && 'uploads_media_thumbs' === $t['id'] && empty( $t['ok'] ) ) {
+					$thumb_ok = false;
+					break;
+				}
+			}
+		}
+		wp_send_json_success(
+			array(
+				'message'      => $thumb_ok
+					? ( 'دسترسی فایل‌های رسانه اصلاح شد. ' . $perm['detail'] )
+					: ( 'chmod انجام شد ولی بندانگشتی هنوز 403 است — لاگ LiteSpeed/مالکیت فایل را بررسی کنید. ' . $perm['detail'] ),
+				'repair'       => $perm,
+				'verification' => isset( $ver['verification'] ) ? $ver['verification'] : array(),
+				'payload'      => MVN_Security_Migration::admin_payload(),
+			)
+		);
 	}
 
 	public function ajax_http_guard_list() {

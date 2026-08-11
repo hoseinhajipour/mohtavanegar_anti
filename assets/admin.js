@@ -1976,4 +1976,29 @@
         notice($('#mvn-sec-result'), 'خطای ارتباط', false);
       });
   });
+
+  $('#mvn-sec-repair-uploads').on('click', function () {
+    var $btn = $(this).prop('disabled', true);
+    notice($('#mvn-sec-result'), 'در حال اصلاح دسترسی فایل‌های uploads…', true);
+    post('mvn_security_repair_uploads', {}, { timeout: 300000 })
+      .done(function (res) {
+        $btn.prop('disabled', false);
+        if (res && res.success) {
+          notice($('#mvn-sec-result'), (res.data && res.data.message) || 'انجام شد', true);
+          window.setTimeout(function () {
+            location.reload();
+          }, 1200);
+        } else {
+          notice(
+            $('#mvn-sec-result'),
+            (res && res.data && res.data.message) || MVN.i18n.error,
+            false
+          );
+        }
+      })
+      .fail(function () {
+        $btn.prop('disabled', false);
+        notice($('#mvn-sec-result'), 'خطای ارتباط', false);
+      });
+  });
 })(jQuery);
