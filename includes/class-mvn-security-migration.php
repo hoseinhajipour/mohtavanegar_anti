@@ -319,7 +319,8 @@ class MVN_Security_Migration {
 	 * @return array{path:string,name:string}
 	 */
 	public static function propose_core_path() {
-		$public = mvn_normalize_path( ABSPATH );
+		$doc    = MVN_Security_Validator::detect_document_root();
+		$public = $doc ? mvn_normalize_path( $doc ) : mvn_normalize_path( ABSPATH );
 		$parent = mvn_normalize_path( dirname( $public ) );
 		$seed   = home_url( '/' ) . '|' . $public;
 		$hash   = substr( hash( 'sha256', $seed ), 0, 10 );
@@ -358,14 +359,27 @@ class MVN_Security_Migration {
 			$logger_lines = ( new MVN_Security_Logger( $state['log_file'] ) )->read_lines( 80 );
 		}
 		$completed = self::is_completed();
+		$busy      = self::is_busy();
+		$switched  = ! empty( $state['public_path'] )
+			&& is_file( $state['public_path'] . '/index.php' )
+			&& false !== strpos( (string) @file_get_contents( $state['public_path'] . '/index.php' ), 'MVN_SECURITY_GATEWAY' );
+		$core_display = '';
+		if ( $completed && ! empty( $state['core_path'] ) ) {
+			$core_display = $state['core_path'];
+		} elseif ( $busy && ! empty( $state['core_path'] ) ) {
+			$core_display = $state['core_path'];
+		} else {
+			$core_display = mvn_normalize_path( ABSPATH );
+		}
 		return array(
 			'state'            => $state,
 			'completed'        => $completed,
-			'busy'             => self::is_busy(),
+			'busy'             => $busy,
+			'switched'         => $switched || in_array( $state['status'], array( 'testing', 'cleanup' ), true ),
 			'public_path'      => $public,
 			'document_root'    => $doc,
-			'wordpress_path'   => $completed && ! empty( $state['core_path'] ) ? $state['core_path'] : mvn_normalize_path( ABSPATH ),
-			'proposed_core'    => $completed && ! empty( $state['core_path'] ) ? $state['core_path'] : $prop['path'],
+			'wordpress_path'   => $core_display,
+			'proposed_core'    => ( $completed || $busy ) && ! empty( $state['core_path'] ) ? $state['core_path'] : $prop['path'],
 			'gateway_path'     => $public . '/index.php',
 			'home_url'         => home_url( '/' ),
 			'site_url'         => site_url( '/' ),
@@ -406,7 +420,8 @@ class MVN_Security_Migration {
 
 		$migration_id = 'security-migration-' . gmdate( 'Ymd-His' ) . '-' . wp_generate_password( 4, false, false );
 		$core         = self::propose_core_path();
-		$public       = mvn_normalize_path( ABSPATH );
+		$doc          = MVN_Security_Validator::detect_document_root();
+		$public       = $doc ? mvn_normalize_path( $doc ) : mvn_normalize_path( ABSPATH );
 		$backup_root  = mvn_data_dir() . '/backups/' . $migration_id;
 		mvn_ensure_data_dirs();
 		if ( ! wp_mkdir_p( $backup_root ) ) {
@@ -545,6 +560,12 @@ class MVN_Security_Migration {
 		$state = self::get_state();
 		if ( empty( $state['backup_dir'] ) ) {
 			return new WP_Error( 'no_backup', 'بک‌آپ برای بازگشت وجود ندارد.' );
+		}
+		// Incomplete migrations keep a filesystem lock; free it before rollback.
+		if ( ! empty( $state['lock_token'] ) ) {
+			mvn_job_lock_release( 'filesystem_mutation', $state['lock_token'] );
+			$state['lock_token'] = '';
+			self::save_state( $state );
 		}
 		$lock = mvn_job_lock_acquire( 'filesystem_mutation', 1800 );
 		if ( ! $lock ) {
@@ -1108,7 +1129,10 @@ class MVN_Security_Migration {
 	 * @return array|WP_Error
 	 */
 	private static function tick_testing( array $state, MVN_Security_Logger $logger ) {
-		$ver = MVN_Security_Validator::verify( $state['public_path'], $state['core_path'] );
+		// Filesystem-only during migration ticks. Loopback HTTP on shared hosting
+		// often hangs until PHP/proxy timeout → admin AJAX "connection error" and
+		// the job stays stuck in testing forever.
+		$ver = MVN_Security_Validator::verify( $state['public_path'], $state['core_path'], array( 'http' => false ) );
 		$state['verification'] = $ver;
 		$state['last_verification'] = isset( $ver['at'] ) ? $ver['at'] : gmdate( 'Y-m-d H:i:s' );
 

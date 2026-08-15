@@ -146,7 +146,10 @@ class MVN_Hardening {
 			if ( ! defined( 'DISABLE_WP_CRON' ) ) {
 				define( 'DISABLE_WP_CRON', true );
 			}
-			add_action( 'init', array( $this, 'block_wp_cron_request' ), 0 );
+			// Block as early as possible (plugin load), not on init — by then
+			// wp-cron.php / other plugins may already have sent output/headers.
+			$this->block_wp_cron_request();
+			add_action( 'plugins_loaded', array( $this, 'block_wp_cron_request' ), 0 );
 		}
 
 		if ( ! empty( $s['block_privileged_signup'] ) ) {
@@ -180,39 +183,48 @@ class MVN_Hardening {
 	}
 
 	public function block_xmlrpc_request() {
-		if ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST ) {
-			status_header( 403 );
-			header( 'Content-Type: text/plain; charset=UTF-8' );
-			echo 'XML-RPC is disabled.';
-			exit;
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return;
 		}
-		// Also catch direct hits to xmlrpc.php that somehow bypass the constant.
 		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : '';
-		if ( false !== stripos( $uri, 'xmlrpc.php' ) ) {
-			status_header( 403 );
-			header( 'Content-Type: text/plain; charset=UTF-8' );
-			echo 'XML-RPC is disabled.';
-			exit;
+		$hit = ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST )
+			|| ( false !== stripos( $uri, 'xmlrpc.php' ) );
+		if ( ! $hit ) {
+			return;
 		}
+		$this->deny_plain( 403, 'XML-RPC is disabled.' );
 	}
 
 	/**
 	 * Block direct HTTP hits to wp-cron.php when cron is disabled.
 	 */
 	public function block_wp_cron_request() {
-		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
-			status_header( 403 );
-			header( 'Content-Type: text/plain; charset=UTF-8' );
-			echo 'WP-Cron is disabled.';
-			exit;
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return;
 		}
 		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : '';
-		if ( false !== stripos( $uri, 'wp-cron.php' ) ) {
-			status_header( 403 );
-			header( 'Content-Type: text/plain; charset=UTF-8' );
-			echo 'WP-Cron is disabled.';
-			exit;
+		$hit = ( defined( 'DOING_CRON' ) && DOING_CRON )
+			|| ( false !== stripos( $uri, 'wp-cron.php' ) );
+		if ( ! $hit ) {
+			return;
 		}
+		$this->deny_plain( 403, 'WP-Cron is disabled.' );
+	}
+
+	/**
+	 * Send a plain-text deny response without triggering "headers already sent".
+	 *
+	 * @param int    $code HTTP status.
+	 * @param string $body Response body.
+	 */
+	private function deny_plain( $code, $body ) {
+		if ( ! headers_sent() ) {
+			status_header( (int) $code );
+			header( 'Content-Type: text/plain; charset=UTF-8' );
+			nocache_headers();
+		}
+		echo $body;
+		exit;
 	}
 
 	public function block_author_enum( $redirect, $requested ) {
@@ -600,7 +612,10 @@ class MVN_Hardening {
  */
 class MVN_Disabled_XMLRPC {
 	public function serve_request() {
-		status_header( 403 );
+		if ( ! headers_sent() ) {
+			status_header( 403 );
+			header( 'Content-Type: text/plain; charset=UTF-8' );
+		}
 		echo 'XML-RPC is disabled.';
 		exit;
 	}

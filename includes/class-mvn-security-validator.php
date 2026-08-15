@@ -202,13 +202,22 @@ class MVN_Security_Validator {
 	/**
 	 * Verify relocated architecture.
 	 *
-	 * @param string $public_path Public web root.
-	 * @param string $core_path   Relocated core.
+	 * @param string               $public_path Public web root.
+	 * @param string               $core_path   Relocated core.
+	 * @param array{http?:bool}|bool $args      Optional. Pass false or array( 'http' => false ) to skip
+	 *                                          loopback HTTP probes (needed during migration ticks —
+	 *                                          shared hosts often hang on self-requests and kill AJAX).
 	 * @return array{ok:bool,critical_ok:bool,tests:array<int,array{id:string,ok:bool,label:string,detail:string,critical:bool}>}
 	 */
-	public static function verify( $public_path, $core_path ) {
+	public static function verify( $public_path, $core_path, $args = true ) {
 		$public_path = mvn_normalize_path( $public_path );
 		$core_path   = mvn_normalize_path( $core_path );
+		$include_http = true;
+		if ( false === $args ) {
+			$include_http = false;
+		} elseif ( is_array( $args ) && array_key_exists( 'http', $args ) ) {
+			$include_http = ! empty( $args['http'] );
+		}
 		$tests       = array();
 
 		$tests[] = self::test(
@@ -263,10 +272,12 @@ class MVN_Security_Validator {
 		$up_ok   = ! is_dir( $uploads ) || ( is_file( $up_ht ) && false !== strpos( (string) @file_get_contents( $up_ht ), 'Deny' ) );
 		$tests[] = self::test( 'uploads_htaccess', 'محافظت uploads در برابر PHP', $up_ok, $up_ht, false );
 
-		// HTTP checks are advisory on shared hosting (loopback/SSL often blocked).
-		$http = self::http_smoke_tests();
-		foreach ( $http as $t ) {
-			$tests[] = $t;
+		// HTTP checks are advisory on shared hosting (loopback/SSL often blocked/hung).
+		if ( $include_http ) {
+			$http = self::http_smoke_tests();
+			foreach ( $http as $t ) {
+				$tests[] = $t;
+			}
 		}
 
 		$critical_ok = true;
@@ -357,8 +368,8 @@ class MVN_Security_Validator {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'     => 8,
-				'redirection' => 3,
+				'timeout'     => 3,
+				'redirection' => 2,
 				'sslverify'   => false,
 				'headers'     => array(
 					'Cache-Control' => 'no-cache',
@@ -396,7 +407,7 @@ class MVN_Security_Validator {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'   => 10,
+				'timeout'   => 3,
 				'sslverify' => false,
 			)
 		);

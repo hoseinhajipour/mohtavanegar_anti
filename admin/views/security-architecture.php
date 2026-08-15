@@ -8,6 +8,7 @@ $state     = isset( $p['state'] ) && is_array( $p['state'] ) ? $p['state'] : arr
 $status    = isset( $state['status'] ) ? (string) $state['status'] : 'not_started';
 $completed = ! empty( $p['completed'] );
 $busy      = ! empty( $p['busy'] );
+$switched  = ! empty( $p['switched'] );
 $public    = isset( $p['public_path'] ) ? (string) $p['public_path'] : '';
 $wp_path   = isset( $p['wordpress_path'] ) ? (string) $p['wordpress_path'] : '';
 $proposed  = isset( $p['proposed_core'] ) ? (string) $p['proposed_core'] : '';
@@ -92,7 +93,13 @@ $preflight = isset( $preflight_result ) && is_array( $preflight_result ) ? $pref
 					</tr>
 					<tr>
 						<th>Security Gateway</th>
-						<td><span class="mvn-badge mvn-badge-warning">غیرفعال</span></td>
+						<td>
+							<?php if ( $switched ) : ?>
+								<span class="mvn-badge mvn-badge-info">نصب‌شده (تأیید ناتمام)</span>
+							<?php else : ?>
+								<span class="mvn-badge mvn-badge-warning">غیرفعال</span>
+							<?php endif; ?>
+						</td>
 					</tr>
 				</table>
 			</div>
@@ -134,7 +141,12 @@ $preflight = isset( $preflight_result ) && is_array( $preflight_result ) ? $pref
 				<?php if ( ! empty( $state['copy_total'] ) ) : ?>
 					— پیشرفت کپی: <?php echo (int) $state['copy_offset']; ?> / <?php echo (int) $state['copy_total']; ?>
 				<?php endif; ?>
-				. می‌توانید ادامه دهید یا لغو کنید.
+				.
+				<?php if ( $switched ) : ?>
+					Gateway نصب شده؛ «ادامه مهاجرت» را بزنید تا تأیید و پاکسازی تمام شود. در صورت مشکل از «بازگردانی معماری» استفاده کنید.
+				<?php else : ?>
+					می‌توانید ادامه دهید یا لغو کنید.
+				<?php endif; ?>
 			</div>
 		<?php endif; ?>
 
@@ -144,10 +156,16 @@ $preflight = isset( $preflight_result ) && is_array( $preflight_result ) ? $pref
 				data-confirm="وردپرس به خارج از ریشه وب منتقل شود؟ این کار برگشت‌پذیر است اما سنگین است. ادامه می‌دهید؟">
 				<?php echo $busy ? 'ادامه مهاجرت' : 'انتقال وردپرس به خارج از ریشه وب'; ?>
 			</button>
-			<?php if ( $busy || 'failed' === $status ) : ?>
+			<?php if ( $busy && ! $switched ) : ?>
 				<button type="button" class="button button-link-delete" id="mvn-sec-abort"
 					data-confirm="مهاجرت ناتمام لغو شود و کپی ناقص پاک گردد؟">
 					لغو مهاجرت ناتمام
+				</button>
+			<?php endif; ?>
+			<?php if ( $switched || 'failed' === $status ) : ?>
+				<button type="button" class="button button-link-delete" id="mvn-sec-rollback"
+					data-confirm="بازگشت به معماری قبلی انجام شود؟ سایت موقتاً در حالت نگهداری قرار می‌گیرد.">
+					بازگردانی معماری
 				</button>
 			<?php endif; ?>
 			<span id="mvn-sec-result"></span>
