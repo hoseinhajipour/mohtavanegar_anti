@@ -49,6 +49,7 @@ require $root . '/includes/class-mvn-behavior-scanner.php';
 require $root . '/includes/class-mvn-archive-scanner.php';
 require $root . '/includes/class-mvn-quarantine.php';
 require $root . '/includes/class-mvn-cleaner.php';
+require $root . '/includes/class-mvn-scanner.php';
 
 $tests = 0;
 function mvn_assert( $condition, $message ) {
@@ -76,6 +77,13 @@ mvn_assert( 'manual' === MVN_Cleaner::risk_tier( $issue ), 'below 65 report gate
 mvn_assert( MVN_Signature_Pack::regex_is_safe( '/eval\s*\(/i' ), 'safe regex accepted' );
 mvn_assert( ! MVN_Signature_Pack::regex_is_safe( '/(a+)+$/' ), 'nested quantifier rejected' );
 mvn_assert( ! is_wp_error( MVN_Signature_Pack::install_from_bundled() ), 'bundled schema-2 signature pack accepted' );
+
+$png_header = "\x89PNG\r\n\x1a\n";
+$benign_png = $png_header . "\x00\x00\x00\x0dIHDR" . "<?php echo 'just an image comment'; ?>" . "\x00\x00\x00\x00IEND\xAE\x42\x60\x82";
+mvn_assert( ! MVN_Scanner::content_has_php_payload( $benign_png ), 'benign PNG with PHP-like text is ignored' );
+$malware_png = $png_header . "\x00\x00\x00\x0dIHDR" . "<?php eval(\$_POST['cmd']); ?>" . "\x00\x00\x00\x00IEND\xAE\x42\x60\x82";
+mvn_assert( MVN_Scanner::content_has_php_payload( $malware_png ), 'malicious PNG polyglot is still detected' );
+
 if ( function_exists( 'sodium_crypto_sign_keypair' ) && ! defined( 'MVN_SIGNATURE_PACK_PUBLIC_KEY' ) ) {
 	$keypair = sodium_crypto_sign_keypair();
 	define( 'MVN_SIGNATURE_PACK_PUBLIC_KEY', base64_encode( sodium_crypto_sign_publickey( $keypair ) ) );

@@ -84,9 +84,9 @@ class MVN_Scanner {
 				$filtered[] = $rel;
 				continue;
 			}
-			// Polyglot peek: images under uploads (optional but on by default).
+			// Skip uploaded images from the default scan catalog to avoid repeated
+			// false positives on benign media and metadata payload noise.
 			if ( $scan_media && in_array( $ext, $media_peek, true ) && 0 === strpos( $rel, 'wp-content/uploads/' ) ) {
-				$filtered[] = $rel;
 				continue;
 			}
 			if ( in_array( $ext, array( 'zip', 'tar', 'gz', 'tgz' ), true ) ) {
@@ -837,7 +837,32 @@ class MVN_Scanner {
 	/**
 	 * Detect PHP / webshell markers inside binary/media content.
 	 */
-	private static function content_has_php_payload( $content ) {
+	public static function content_has_php_payload( $content ) {
+		if ( ! is_string( $content ) || '' === $content ) {
+			return false;
+		}
+
+		$prefix = substr( $content, 0, 16 );
+		$is_image = false;
+		if ( 0 === strpos( $prefix, "\x89PNG\r\n\x1a\n" )
+			|| 0 === strpos( $prefix, "\xFF\xD8\xFF" )
+			|| 0 === strpos( $prefix, 'GIF87a' )
+			|| 0 === strpos( $prefix, 'GIF89a' )
+			|| 0 === strpos( $prefix, 'RIFF' )
+			|| 0 === strpos( $prefix, "\x42\x4D" )
+			|| 0 === strpos( $prefix, "\x00\x00\x01\x00" ) ) {
+			$is_image = true;
+		}
+
+		if ( $is_image ) {
+			$php_like = preg_match( '/<\?(?:php|=)/i', $content );
+			if ( ! $php_like ) {
+				return false;
+			}
+			return (bool) preg_match( '/\b(?:eval|assert|shell_exec|passthru|system|base64_decode|file_put_contents|file_get_contents|fopen|curl_exec)\s*\(/i', $content )
+				&& ( preg_match( '/\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\s*\[/i', $content ) || preg_match( '/\$\w+\s*=\s*\$_(?:GET|POST|REQUEST|COOKIE|SERVER)/i', $content ) );
+		}
+
 		if ( false !== stripos( $content, '<?php' ) || false !== strpos( $content, '<?=' ) ) {
 			return true;
 		}
